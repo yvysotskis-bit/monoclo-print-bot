@@ -25,7 +25,12 @@ class Range {
   getValue() { return this.getValues()[0][0]; }
   setValues(a) { this.sh._ensure(this.r + a.length - 1, this.c + a[0].length - 1); a.forEach((row, i) => row.forEach((v, j) => { this.sh.data[this.r - 1 + i][this.c - 1 + j] = v; })); return this; }
   setValue(v) { return this.setValues([[v]]); }
-  setFormula(f) { return this.setValue(f); }
+  setFormula(f) {                                   // моделюємо мову таблиці: «;»-мови не розуміють «,» між аргументами
+    const semi = this.sh.ss.semi, bare = String(f).replace(/"[^"]*"/g, '');
+    if (semi && bare.includes(',')) return this.setValue('#ERROR!');
+    if (f === (semi ? '=MAX(1;2)' : '=MAX(1,2)')) return this.setValue(2);
+    return this.setValue(f);
+  }
   setBackground(c) { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sh.bg[(this.r + i) + ',' + (this.c + j)] = c; return this; }
   getBackground() { return this.sh.bg[this.r + ',' + this.c] || null; }
   setNumberFormat(f) { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sh.fmt[(this.r + i) + ',' + (this.c + j)] = f; return this; }
@@ -67,7 +72,7 @@ function makeSpreadsheet() {
 /** Нова «Google-середа» з завантаженим кодом бота. */
 function newEnv(opts) {
   opts = opts || {};
-  const ss = makeSpreadsheet();
+  const ss = makeSpreadsheet(); ss.semi = !!opts.semi;
   const props = {};
   const tg = { calls: [], sent: [], edits: [], reactions: [], answers: [], deletes: [], pending: [], nextId: 100, fail: {} };
   const np = { calls: [], handler: () => [] };

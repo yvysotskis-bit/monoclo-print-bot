@@ -992,6 +992,41 @@ function bot_today() {
   return bot_makeDate(p.y, p.m, p.d);
 }
 
+// ---------- формули: роздільник аргументів залежить від мови таблиці ----------
+
+/**
+ * У таблицях з українською (та іншими «комовими») мовами Google читає формулу з «;» між аргументами,
+ * в англомовних — з «,». Визначаємо пробною формулою один раз за запуск; якщо визначити не вдалось — «,».
+ */
+function bot_formulaSep_(sheet) {
+  if (BOT_CACHE_.sep) return BOT_CACHE_.sep;
+  var sep = ',';
+  try {
+    var cell = sheet.getRange('Z1');
+    cell.setFormula('=MAX(1,2)'); SpreadsheetApp.flush();
+    if (cell.getValue() === 2) sep = ',';
+    else {
+      cell.setFormula('=MAX(1;2)'); SpreadsheetApp.flush();
+      if (cell.getValue() === 2) sep = ';';
+    }
+    cell.clear();
+  } catch (e) { bot_log('УВАГА', 'роздільник формул', e.message); }
+  BOT_CACHE_.sep = sep;
+  return sep;
+}
+
+/** Перетворює «англійську» формулу (з комами) під мову таблиці. Коми всередині "рядків" не чіпає. */
+function bot_fx(formula) {
+  if ((BOT_CACHE_.sep || ',') === ',') return formula;
+  var out = '', inStr = false;
+  for (var i = 0; i < formula.length; i++) {
+    var ch = formula.charAt(i);
+    if (ch === '"') inStr = !inStr;
+    out += (!inStr && ch === ',') ? ';' : ch;
+  }
+  return out;
+}
+
 
 // ======================= Telegram.gs =======================
 /**
@@ -3202,6 +3237,7 @@ function bot_buildSummary() {
 
   sh.clear();
   sh.clearConditionalFormatRules();
+  bot_formulaSep_(sh);                                   // «,» чи «;» — залежить від мови таблиці
   sh.setHiddenGridlines(true);
   var money = '#,##0" грн"';
   var f = {};                                       // комірка → формула / значення
@@ -3210,12 +3246,12 @@ function bot_buildSummary() {
   sh.getRange('A1').setValue('Монокло — Виробництво 2026 · Підсумки').setFontSize(16).setFontWeight('bold');
   sh.getRange('A2').setValue('Усе рахується автоматично з аркушів «Замовлення» і «Оплати». Цей аркуш не редагуйте.').setFontColor('#666666');
   sh.getRange('A4:E4').setValues([['Собівартість усього', 'Оплачено усього', 'БОРГ', 'Остання оплата — дата', 'Остання оплата — сума']]);
-  sh.getRange('A5').setFormula('=SUM(' + R('cost') + ')');
-  sh.getRange('B5').setFormula('=SUM(' + P('sum') + ')');
-  sh.getRange('C5').setFormula('=A5-B5');
+  sh.getRange('A5').setFormula(bot_fx('=SUM(' + R('cost') + ')'));
+  sh.getRange('B5').setFormula(bot_fx('=SUM(' + P('sum') + ')'));
+  sh.getRange('C5').setFormula(bot_fx('=A5-B5'));
   // остання заповнена оплата в стовпці «Сума оплати»
-  sh.getRange('D5').setFormula('=IFERROR(INDEX(' + P('date') + ',MATCH(9.99E+307,' + P('sum') + ')),"")');
-  sh.getRange('E5').setFormula('=IFERROR(INDEX(' + P('sum') + ',MATCH(9.99E+307,' + P('sum') + ')),"")');
+  sh.getRange('D5').setFormula(bot_fx('=IFERROR(INDEX(' + P('date') + ',COUNT(' + P('sum') + ')),"")'));
+  sh.getRange('E5').setFormula(bot_fx('=IFERROR(INDEX(' + P('sum') + ',COUNT(' + P('sum') + ')),"")'));
   sh.getRange('A4:E4').setFontWeight('bold').setBackground('#1f3864').setFontColor('#ffffff').setHorizontalAlignment('center');
   sh.getRange('A5:E5').setFontSize(18).setFontWeight('bold').setHorizontalAlignment('center').setBackground('#eef3fb');
   sh.getRange('A5:C5').setNumberFormat(money);
@@ -3226,19 +3262,19 @@ function bot_buildSummary() {
   // службові клітинки місяця
   sh.getRange('G1').setValue('Початок місяця').setFontColor('#999999');
   sh.getRange('G2').setValue('Початок наступного').setFontColor('#999999');
-  sh.getRange('H1').setFormula('=DATE(YEAR(TODAY()),MONTH(TODAY()),1)').setNumberFormat('dd.mm.yyyy').setFontColor('#999999');
-  sh.getRange('H2').setFormula('=EDATE(H1,1)').setNumberFormat('dd.mm.yyyy').setFontColor('#999999');
+  sh.getRange('H1').setFormula(bot_fx('=DATE(YEAR(TODAY()),MONTH(TODAY()),1)')).setNumberFormat('dd.mm.yyyy').setFontColor('#999999');
+  sh.getRange('H2').setFormula(bot_fx('=EDATE(H1,1)')).setNumberFormat('dd.mm.yyyy').setFontColor('#999999');
 
   // ---- Сьогодні ----
   bot_sumHeader_(sh, 7, 'Сьогодні');
   sh.getRange('A8').setValue('Додано речей · собівартість');
-  sh.getRange('B8').setFormula('=COUNTIFS(' + R('date') + ',TODAY(),' + R('status') + ',' + W + ')');
-  sh.getRange('C8').setFormula('=SUMIFS(' + R('cost') + ',' + R('date') + ',TODAY(),' + R('status') + ',' + W + ')').setNumberFormat(money);
+  sh.getRange('B8').setFormula(bot_fx('=COUNTIFS(' + R('date') + ',TODAY(),' + R('status') + ',' + W + ')'));
+  sh.getRange('C8').setFormula(bot_fx('=SUMIFS(' + R('cost') + ',' + R('date') + ',TODAY(),' + R('status') + ',' + W + ')')).setNumberFormat(money);
   sh.getRange('A9').setValue('ТТН «Не передана»');
-  sh.getRange('B9').setFormula('=IFERROR(ROWS(UNIQUE(FILTER(' + R('ttn') + ',' + R('stage') + '="Не передана",' + R('status') + '=' + W + ',' + R('ttn') + '<>""))),0)');
+  sh.getRange('B9').setFormula(bot_fx('=IFERROR(ROWS(UNIQUE(FILTER(' + R('ttn') + ',' + R('stage') + '="Не передана",' + R('status') + '=' + W + ',' + R('ttn') + '<>""))),0)'));
   sh.getRange('A10').setValue('Посилок «На відділенні» 4+ дні');
   if (om.arrived) {
-    sh.getRange('B10').setFormula('=IFERROR(ROWS(UNIQUE(FILTER(' + R('ttn') + ',' + R('stage') + '="На відділенні",' + R('status') + '=' + W + ',' + R('arrived') + '<>"",' + R('arrived') + '<=TODAY()-4))),0)');
+    sh.getRange('B10').setFormula(bot_fx('=IFERROR(ROWS(UNIQUE(FILTER(' + R('ttn') + ',' + R('stage') + '="На відділенні",' + R('status') + '=' + W + ',' + R('arrived') + '<>"",' + R('arrived') + '<=TODAY()-4))),0)'));
   }
 
   // ---- Поточний місяць ----
@@ -3247,31 +3283,31 @@ function bot_buildSummary() {
   BOT_TYPES.forEach(function (t, i) {
     var r = 14 + i;
     sh.getRange('A' + r).setValue(t);
-    sh.getRange('B' + r).setFormula('=' + monthCount(crit('type', t), '$H$1', '$H$2'));
-    sh.getRange('C' + r).setFormula('=' + monthSum(crit('type', t), '$H$1', '$H$2')).setNumberFormat(money);
+    sh.getRange('B' + r).setFormula(bot_fx('=' + monthCount(crit('type', t), '$H$1', '$H$2')));
+    sh.getRange('C' + r).setFormula(bot_fx('=' + monthSum(crit('type', t), '$H$1', '$H$2'))).setNumberFormat(money);
   });
   sh.getRange('A17').setValue('Разом').setFontWeight('bold');
-  sh.getRange('B17').setFormula('=' + monthCount('', '$H$1', '$H$2')).setFontWeight('bold');
-  sh.getRange('C17').setFormula('=' + monthSum('', '$H$1', '$H$2')).setNumberFormat(money).setFontWeight('bold');
+  sh.getRange('B17').setFormula(bot_fx('=' + monthCount('', '$H$1', '$H$2'))).setFontWeight('bold');
+  sh.getRange('C17').setFormula(bot_fx('=' + monthSum('', '$H$1', '$H$2'))).setNumberFormat(money).setFontWeight('bold');
   sh.getRange('A18').setValue('Оплачено за місяць');
-  sh.getRange('B18').setFormula('=SUMIFS(' + P('sum') + ',' + P('date') + ',">="&$H$1,' + P('date') + ',"<"&$H$2)').setNumberFormat(money);
+  sh.getRange('B18').setFormula(bot_fx('=SUMIFS(' + P('sum') + ',' + P('date') + ',">="&$H$1,' + P('date') + ',"<"&$H$2)')).setNumberFormat(money);
   sh.getRange('A19').setValue('Відмови: шт. · грн · % від отриманих+відмов');
-  sh.getRange('B19').setFormula('=' + monthCount(crit('stage', 'Відмова'), '$H$1', '$H$2'));
-  sh.getRange('C19').setFormula('=' + monthSum(crit('stage', 'Відмова'), '$H$1', '$H$2')).setNumberFormat(money);
-  sh.getRange('D19').setFormula('=IFERROR(B19/(B19+' + monthCount(crit('stage', 'Отримано'), '$H$1', '$H$2') + '),0)').setNumberFormat('0.0%');
+  sh.getRange('B19').setFormula(bot_fx('=' + monthCount(crit('stage', 'Відмова'), '$H$1', '$H$2')));
+  sh.getRange('C19').setFormula(bot_fx('=' + monthSum(crit('stage', 'Відмова'), '$H$1', '$H$2'))).setNumberFormat(money);
+  sh.getRange('D19').setFormula(bot_fx('=IFERROR(B19/(B19+' + monthCount(crit('stage', 'Отримано'), '$H$1', '$H$2') + '),0)')).setNumberFormat('0.0%');
 
   // ---- До оплати наступної звірки ----
   bot_sumHeader_(sh, 21, 'До оплати наступної звірки');
   sh.getRange('A22').setValue('Сума «Не оплачено» для етапів «Отримано» + «Відмова» (орієнтир, скільки має виставити виробництво)');
   sh.getRange('A22').setWrap(true);
-  sh.getRange('B22').setFormula('=SUMIFS(' + R('cost') + ',' + R('paid') + ',"Не оплачено",' + R('stage') + ',"Отримано",' + R('status') + ',' + W + ')+' +
-    'SUMIFS(' + R('cost') + ',' + R('paid') + ',"Не оплачено",' + R('stage') + ',"Відмова",' + R('status') + ',' + W + ')').setNumberFormat(money).setFontWeight('bold');
+  sh.getRange('B22').setFormula(bot_fx('=SUMIFS(' + R('cost') + ',' + R('paid') + ',"Не оплачено",' + R('stage') + ',"Отримано",' + R('status') + ',' + W + ')+' +
+    'SUMIFS(' + R('cost') + ',' + R('paid') + ',"Не оплачено",' + R('stage') + ',"Відмова",' + R('status') + ',' + W + ')')).setNumberFormat(money).setFontWeight('bold');
 
   // ---- Спірні ----
   bot_sumHeader_(sh, 24, 'Спірні');
   sh.getRange('A25').setValue('Рядків «Спірна» · сума');
-  sh.getRange('B25').setFormula('=COUNTIFS(' + R('paid') + ',"Спірна")');
-  sh.getRange('C25').setFormula('=SUMIFS(' + R('cost') + ',' + R('paid') + ',"Спірна")').setNumberFormat(money);
+  sh.getRange('B25').setFormula(bot_fx('=COUNTIFS(' + R('paid') + ',"Спірна")'));
+  sh.getRange('C25').setFormula(bot_fx('=SUMIFS(' + R('cost') + ',' + R('paid') + ',"Спірна")')).setNumberFormat(money);
 
   // ---- Швидкість виробництва (значення пише скрипт) ----
   bot_sumHeader_(sh, BOT_SUM_SPEED_ROW - 1, 'Швидкість виробництва (замовлення → передача Новій пошті)');
@@ -3286,12 +3322,12 @@ function bot_buildSummary() {
   sh.getRange(mr - 1, 1, 1, 6).setValues([['Місяць'].concat(BOT_TYPES).concat(['Усього речей', 'Собівартість'])]).setFontWeight('bold');
   for (var k = 0; k < 12; k++) {
     var r = mr + k;
-    sh.getRange(r, 1).setFormula('=EDATE($H$1,' + (k - 11) + ')').setNumberFormat('mmmm yyyy');
+    sh.getRange(r, 1).setFormula(bot_fx('=EDATE($H$1,' + (k - 11) + ')')).setNumberFormat('mmmm yyyy');
     BOT_TYPES.forEach(function (t, i) {
-      sh.getRange(r, 2 + i).setFormula('=' + monthCount(crit('type', t), '$A' + r, 'EDATE($A' + r + ',1)'));
+      sh.getRange(r, 2 + i).setFormula(bot_fx('=' + monthCount(crit('type', t), '$A' + r, 'EDATE($A' + r + ',1)')));
     });
-    sh.getRange(r, 5).setFormula('=' + monthCount('', '$A' + r, 'EDATE($A' + r + ',1)'));
-    sh.getRange(r, 6).setFormula('=' + monthSum('', '$A' + r, 'EDATE($A' + r + ',1)')).setNumberFormat(money);
+    sh.getRange(r, 5).setFormula(bot_fx('=' + monthCount('', '$A' + r, 'EDATE($A' + r + ',1)')));
+    sh.getRange(r, 6).setFormula(bot_fx('=' + monthSum('', '$A' + r, 'EDATE($A' + r + ',1)'))).setNumberFormat(money);
   }
 
   sh.setColumnWidth(1, 330);

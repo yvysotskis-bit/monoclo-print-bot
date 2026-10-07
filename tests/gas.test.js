@@ -650,3 +650,22 @@ test('Список «Тип речі» — звичайні значення з 
   env.update(cb(q.reply_markup.inline_keyboard[0][0].callback_data, q.message_id)); env.poll();
   assert.deepEqual(list(), ['Футболка', 'Худі фліс', 'Худі не утеплене', 'Кепка']);
 });
+
+test('Формули «Підсумків» працюють і в таблиці з «;»-мовою (українська), і з «,»-мовою', () => {
+  [true, false].forEach(semi => {
+    const env = newEnv({ oldWorkbook, semi });
+    env.setup();
+    const v = env.sheet('Підсумки').getDataRange().getValues();
+    const cells = [].concat(...v).filter(c => typeof c === 'string');
+    assert.equal(cells.filter(c => c === '#ERROR!').length, 0, 'semi=' + semi);
+    const formulas = cells.filter(c => c.startsWith('='));
+    assert.ok(formulas.length > 80);
+    const bare = f => f.replace(/"[^"]*"/g, '');
+    assert.ok(formulas.every(f => semi ? !bare(f).includes(',') : !bare(f).includes(';')), 'роздільник semi=' + semi);
+    assert.match(env.sheet('Підсумки').getRange('A5').getValue(), /^=SUM\(/);
+    const countifs = formulas.find(f => f.startsWith('=COUNTIFS('));
+    assert.ok(countifs.includes(semi ? ';' : ','));
+    assert.ok(!formulas.some(f => /9\.99/.test(f)), 'без десяткових чисел у формулах');
+    assert.equal(env.sheet('Підсумки').getRange('Z1').getValue(), '', 'пробна клітинка очищена');
+  });
+});

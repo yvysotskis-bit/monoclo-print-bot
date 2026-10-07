@@ -296,3 +296,38 @@ function bot_today() {
   var p = bot_kyivParts(new Date());
   return bot_makeDate(p.y, p.m, p.d);
 }
+
+// ---------- формули: роздільник аргументів залежить від мови таблиці ----------
+
+/**
+ * У таблицях з українською (та іншими «комовими») мовами Google читає формулу з «;» між аргументами,
+ * в англомовних — з «,». Визначаємо пробною формулою один раз за запуск; якщо визначити не вдалось — «,».
+ */
+function bot_formulaSep_(sheet) {
+  if (BOT_CACHE_.sep) return BOT_CACHE_.sep;
+  var sep = ',';
+  try {
+    var cell = sheet.getRange('Z1');
+    cell.setFormula('=MAX(1,2)'); SpreadsheetApp.flush();
+    if (cell.getValue() === 2) sep = ',';
+    else {
+      cell.setFormula('=MAX(1;2)'); SpreadsheetApp.flush();
+      if (cell.getValue() === 2) sep = ';';
+    }
+    cell.clear();
+  } catch (e) { bot_log('УВАГА', 'роздільник формул', e.message); }
+  BOT_CACHE_.sep = sep;
+  return sep;
+}
+
+/** Перетворює «англійську» формулу (з комами) під мову таблиці. Коми всередині "рядків" не чіпає. */
+function bot_fx(formula) {
+  if ((BOT_CACHE_.sep || ',') === ',') return formula;
+  var out = '', inStr = false;
+  for (var i = 0; i < formula.length; i++) {
+    var ch = formula.charAt(i);
+    if (ch === '"') inStr = !inStr;
+    out += (!inStr && ch === ',') ? ';' : ch;
+  }
+  return out;
+}
