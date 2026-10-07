@@ -1568,6 +1568,7 @@ function bot_priceCallback(parts, ctx) {
     var row = sh.getLastRow() + 1;
     sh.getRange(row, 1, 1, 4).setValues([[p.type, p.price, new Date(p.from), 'додано з Telegram']]);
     sh.getRange(row, 3).setNumberFormat('dd.mm.yyyy');
+    bot_syncTypeList();                                   // новий тип одразу з'являється у списку «Тип речі»
   });
   bot_pendingDrop(parts[1]);
   bot_answerCb(ctx.cb.id, 'Додано');
@@ -3414,8 +3415,6 @@ function bot_setupLists_() {
   sh.getRange(1, 1, 1, headers.length).setValues([headers]);
   bot_styleHeader_(sh, headers.length);
   var lists = [null, BOT_COLORS, BOT_SIZES, BOT_PLACEMENTS, BOT_STAGES, BOT_ORDER_STATUSES, BOT_PAID_VALUES];
-  // «Тип речі» — з аркуша «Прайс» (новий тип з'являється в списку сам)
-  sh.getRange('A2').setFormula("=IFERROR(UNIQUE(FILTER('" + BOT_SHEETS.price + "'!A2:A,'" + BOT_SHEETS.price + "'!A2:A<>\"\")),\"\")");
   lists.forEach(function (arr, i) {
     if (!arr) return;
     sh.getRange(2, i + 1, arr.length, 1).setValues(arr.map(function (v) { return [v]; }));
@@ -3455,6 +3454,16 @@ function bot_setupPrice_() {
   sh.getRange(2, 3, 200, 1).setNumberFormat('dd.mm.yyyy');
   sh.setColumnWidths(1, 4, 170);
   sh.getRange('F1').setValue('Нова ціна = новий рядок з датою «Діє з». Старі рядки не видаляйте.').setFontColor('#777777');
+  bot_syncTypeList();
+}
+
+/** Список «Тип речі» в «Довідниках» — звичайні значення з аркуша «Прайс» (без формул, щоб не було #ERROR!). */
+function bot_syncTypeList() {
+  var types = [];
+  bot_readPriceRows().forEach(function (r) { if (types.indexOf(r.type) < 0) types.push(r.type); });
+  var sh = bot_sheet(BOT_SHEETS.lists);
+  sh.getRange(2, 1, 39, 1).clearContent();
+  if (types.length) sh.getRange(2, 1, types.length, 1).setValues(types.map(function (t) { return [t]; }));
 }
 
 // ---------- «Замовлення» ----------

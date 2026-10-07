@@ -212,6 +212,7 @@ function bot_priceCallback(parts, ctx) {
     var row = sh.getLastRow() + 1;
     sh.getRange(row, 1, 1, 4).setValues([[p.type, p.price, new Date(p.from), 'додано з Telegram']]);
     sh.getRange(row, 3).setNumberFormat('dd.mm.yyyy');
+    bot_syncTypeList();                                   // новий тип одразу з'являється у списку «Тип речі»
   });
   bot_pendingDrop(parts[1]);
   bot_answerCb(ctx.cb.id, 'Додано');

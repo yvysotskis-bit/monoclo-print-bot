@@ -639,3 +639,14 @@ test('Кнопка «📋 Деталі» показує повний списо�
   assert.equal((added.match(/<code>\d{14}<\/code>/g) || []).length, 74);
   assert.match(added, /drive\.example/);
 });
+
+test('Список «Тип речі» — звичайні значення з «Прайсу» (без формул); новий тип з /price з’являється в ньому', () => {
+  const env = fresh();
+  const list = () => env.sheet('Довідники').getRange(2, 1, 6, 1).getValues().map(r => r[0]).filter(Boolean);
+  assert.deepEqual(list(), ['Футболка', 'Худі фліс', 'Худі не утеплене']);
+  assert.ok(!String(env.sheet('Довідники').getRange(2, 1).getValue()).startsWith('='));
+  env.update(privMsg('/price Кепка 300 01.11.2026')); env.poll();
+  const q = env.lastSent();
+  env.update(cb(q.reply_markup.inline_keyboard[0][0].callback_data, q.message_id)); env.poll();
+  assert.deepEqual(list(), ['Футболка', 'Худі фліс', 'Худі не утеплене', 'Кепка']);
+});
