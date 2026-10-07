@@ -61,7 +61,9 @@ function bot_npParseItem(raw) {
     phone: bot_trim(raw.PhoneRecipient || raw.RecipientPhone)
   };
   item.stage = bot_npStageByCode(item.code);
-  item.statusText = status + (scheduled ? ' (очік. доставка: ' + bot_fmtNpDate(scheduled) + ')' : '');
+  // як у старому скрипті: дата «очік. доставка» — рівно в такому вигляді, як її віддає НП (напр. 12-07-2026 12:00:00)
+  var scheduledRaw = bot_trim(raw.ScheduledDeliveryDate);
+  item.statusText = status + (scheduledRaw ? ' (очік. доставка: ' + scheduledRaw + ')' : '');
   item.notFound = item.code === '3' || /не знайдено/i.test(status);
   return item;
 }
