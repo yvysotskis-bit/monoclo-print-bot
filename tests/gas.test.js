@@ -627,3 +627,15 @@ test('У коді немає doPost (вебхук не використовує�
   const names = [...src.matchAll(/^function\s+(\w+)/gm)].map(m => m[1]).filter(n => n !== 'onOpen');
   assert.ok(names.every(n => n.startsWith('bot_')), names.filter(n => !n.startsWith('bot_')).join(','));
 });
+
+test('Кнопка «📋 Деталі» показує повний список проблемних ТТН і посилання на файл', () => {
+  const env = fresh(true);
+  sendFile(env, readSheet('46000.xlsx'));
+  const s = env.tg.sent.find(x => /Звірка З-/.test(x.text)); const id = s.text.match(/Звірка (З-[\d-]+)/)[1];
+  const before = env.tg.sent.length;
+  env.update(cb('det|' + id, s.message_id)); env.poll();
+  const added = env.tg.sent.slice(before).map(x => x.text).join('\n');
+  assert.match(added, /Деталі · З-/);
+  assert.equal((added.match(/<code>\d{14}<\/code>/g) || []).length, 74);
+  assert.match(added, /drive\.example/);
+});
