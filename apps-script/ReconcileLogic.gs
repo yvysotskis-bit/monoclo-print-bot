@@ -180,6 +180,18 @@ function bot_nextReconId(existingIds, date) {
 
 function bot_orderLine_(o) { return '№' + o.no + ' ' + (o.type || 'виріб') + ' ' + bot_fmtNum(o.cost); }
 
+/** Розбиває довгий текст по рядках на частини ≤ limit. */
+function bot_splitText(text, limit) {
+  limit = limit || 4000;
+  var out = [], cur = '';
+  String(text).split('\n').forEach(function (line) {
+    if (cur && cur.length + 1 + line.length > limit) { out.push(cur); cur = line; }
+    else cur = cur ? cur + '\n' + line : line;
+  });
+  if (cur) out.push(cur);
+  return out;
+}
+
 function bot_splitMessages(parts, limit) {
   limit = limit || 4000;
   var out = [], cur = '';
@@ -226,7 +238,7 @@ function bot_buildReconSummary(meta, details) {
     });
     if (probs.length > 30) L.push('… ще ' + (probs.length - 30) + '. Повний список — аркуш «Звірки_деталі», фільтр за ID ' + bot_esc(meta.id));
   }
-  S.deferredReminders.forEach(function (d) {
+  S.deferredReminders.filter(function (d) { return d.deferred !== meta.id; }).forEach(function (d) {
     L.push('🔔 ' + bot_code(d.ttn) + ' — раніше відкладено у ' + bot_esc(d.deferred));
   });
   return L.join('\n');

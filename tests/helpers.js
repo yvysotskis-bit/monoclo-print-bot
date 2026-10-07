@@ -8,7 +8,7 @@ const ROOT = path.join(__dirname, '..');
 
 function loadBot() {
   const dir = path.join(ROOT, 'apps-script');
-  const files = fs.readdirSync(dir).filter(f => f.endsWith('.gs') && f !== 'ALL_IN_ONE.gs').sort();
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.gs') && f !== 'ALL_IN_ONE.gs').sort().reverse();
   const ctx = vm.createContext({ console, Date, Math, JSON, Number, String, Object, Array, RegExp, isNaN, isFinite, parseInt, parseFloat });
   files.forEach(f => vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), ctx, { filename: f }));
   return ctx;
