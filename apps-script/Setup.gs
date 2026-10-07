@@ -153,7 +153,7 @@ function bot_setupOrders_() {
   var listCols = { type: 'A', color: 'B', size: 'C', placement: 'D', stage: 'E', status: 'F', paid: 'G' };
   Object.keys(listCols).forEach(function (k) {
     var rule = SpreadsheetApp.newDataValidation()
-      .requireValueInRange(lists.getRange(listCols[k] + '2:' + listCols[k] + '40'), true).setAllowInvalid(false).build();
+      .requireValueInRange(lists.getRange(listCols[k] + '2:' + listCols[k] + '40'), true).setAllowInvalid(true).build();
     col(k).setDataValidation(rule);
   });
   col('prints').setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(['1', '2'], true).setAllowInvalid(true).build());
