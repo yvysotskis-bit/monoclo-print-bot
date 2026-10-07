@@ -197,6 +197,29 @@ function bot_appendOrderRow(obj, yellowKeys) {
   });
 }
 
+/** Пакетне додавання рядків (імпорт): items = [{obj, yellow:[ключі]}]. Повертає номери рядків. */
+function bot_appendOrderRows(items) {
+  if (!items.length) return [];
+  return bot_withLock(function () {
+    var sh = bot_ordersSheet();
+    var map = bot_ordersMap(sh);
+    var start = bot_nextOrderRow_(sh, map);
+    var width = sh.getLastColumn();
+    bot_ensureRow_(sh, start + items.length);
+    var arr = items.map(function (it) {
+      var line = []; for (var i = 0; i < width; i++) line.push('');
+      BOT_ORDER_COLS.forEach(function (c) {
+        if (map[c[0]] && it.obj[c[0]] !== undefined && it.obj[c[0]] !== null) line[map[c[0]] - 1] = it.obj[c[0]];
+      });
+      return line;
+    });
+    if (map.ttn) sh.getRange(start, map.ttn, items.length, 1).setNumberFormat('@');
+    sh.getRange(start, 1, items.length, width).setBackground(null).setValues(arr);
+    items.forEach(function (it, i) { if (it.yellow && it.yellow.length) bot_markYellow_(sh, map, start + i, it.yellow); });
+    return items.map(function (it, i) { return start + i; });
+  });
+}
+
 function bot_markYellow_(sh, map, rowNum, keys) {
   keys.forEach(function (k) { if (map[k]) sh.getRange(rowNum, map[k]).setBackground(BOT_COLOR_YELLOW); });
 }

@@ -23,6 +23,7 @@ function onOpen() {
     .addItem('Ввести ключ Нової пошти', 'bot_menuNpKey')
     .addSeparator()
     .addItem('Імпорт з попередньої версії', 'bot_menuImport')
+    .addItem('Імпорт замовлень з експорту Telegram', 'bot_menuTgImport')
     .addSeparator()
     .addItem('Увімкнути бота', 'bot_menuEnable')
     .addItem('Вимкнути бота', 'bot_menuDisable')
@@ -135,6 +136,27 @@ function bot_menuImport() {
     var rep = bot_importFromUrl(url);
     bot_alert_('Імпорт завершено', bot_importReportText(rep, false));
     if (bot_ownerIds().length && bot_prop(BOT_PROP.TG_TOKEN)) bot_sendToOwners(bot_importReportText(rep, true));
+  } catch (e) { bot_alert_('Імпорт не вдався', e.message); }
+}
+
+// ---------- імпорт замовлень з експорту Telegram ----------
+
+function bot_menuTgImport() {
+  var ui = bot_ui_();
+  var r = ui.prompt('Імпорт замовлень з експорту Telegram',
+    'Вставте посилання на файл messages.html (він має лежати на вашому Google Диску). Якщо файлів кілька (messages.html, messages2.html…) — вставте всі посилання через пробіл.', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  try {
+    bot_ss().toast('Читаю файл…', '🤖 Бот', 60);
+    var plan = bot_tgImportPlan(r.getResponseText());
+    if (!plan.rows.length) { bot_alert_('Нових замовлень немає', bot_tgImportReportText(plan, false, false)); return; }
+    var go = ui.alert('Додати замовлення?', 'Останній номер у таблиці: ' + plan.afterNo + '.\n\n' + bot_tgImportReportText(plan, false, false) + '\n\nДодати їх у таблицю?', ui.ButtonSet.YES_NO);
+    if (go !== ui.Button.YES) return;
+    bot_ss().toast('Додаю замовлення…', '🤖 Бот', 60);
+    bot_tgImportApply(plan);
+    var text = bot_tgImportReportText(plan, false, true);
+    bot_alert_('Готово', text);
+    if (bot_ownerIds().length && bot_prop(BOT_PROP.TG_TOKEN)) bot_sendToOwners(bot_tgImportReportText(plan, true, true));
   } catch (e) { bot_alert_('Імпорт не вдався', e.message); }
 }
 

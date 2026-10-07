@@ -173,8 +173,14 @@ function bot_normSize(v) {
   return BOT_SIZES.indexOf(s) >= 0 ? s : '';
 }
 
+/** Латинські літери-двійники → кириличні (менеджери іноді пишуть «cіра» з латинською c). */
+function bot_deLatin_(s) {
+  var map = { a: 'а', c: 'с', e: 'е', i: 'і', k: 'к', m: 'м', o: 'о', p: 'р', x: 'х', y: 'у', h: 'н', t: 'т', b: 'в' };
+  return String(s).replace(/[acekimopxyhtb]/g, function (ch) { return map[ch]; });
+}
+
 function bot_normColor(text) {
-  var t = bot_trim(text).toLowerCase();
+  var t = bot_deLatin_(bot_trim(text).toLowerCase());
   if (/чорн/.test(t)) return 'Чорний';
   if (/біл/.test(t)) return 'Білий';
   if (/сір|графіт/.test(t)) return 'Сірий';
@@ -187,12 +193,13 @@ function bot_normColor(text) {
  */
 function bot_parseTypeColor(text) {
   var t = bot_trim(text).toLowerCase();
+  if (/[а-яіїєґ]/.test(t)) t = bot_deLatin_(t);            // змішані латиниця + кирилиця → кирилиця
   var res = { type: '', color: bot_normColor(t), ambiguous: false, found: false };
   if (/футболк/.test(t)) { res.type = 'Футболка'; res.found = true; return res; }
   if (/худі|худи/.test(t)) {
     res.found = true;
     if (/без\s+фліс|не\s*утепл|без\s+утепл/.test(t)) res.type = 'Худі не утеплене';
-    else if (/з\s+фліс|флісом|утепл/.test(t)) res.type = 'Худі фліс';
+    else if (/фліс|утепл/.test(t)) res.type = 'Худі фліс';
     else res.ambiguous = true;
   }
   return res;
@@ -220,25 +227,29 @@ function bot_countPrints(printText) {
 // Розбір підпису замовлення з групи (розділ 4.2)
 // =====================================================================
 
-/**
- * @return {ok, no, print, prints, type, typeAmbiguous, color, size, placement, ttn, issues:[{field,text}]}
- *   ok=false — це не замовлення (мовчки ігноруємо).
- */
-function bot_parseOrderCaption(text) {
-  var res = {
-    ok: false, no: null, print: '', prints: 1, type: '', typeAmbiguous: false, color: '',
-    size: '', placement: '', ttn: '', issues: []
-  };
-  var lines = String(text || '').split(/\r?\n/).map(bot_trim).filter(function (l) { return l !== ''; });
-  if (!lines.length) return res;
-  var m = lines[0].match(/^(\d{1,6})[.)]\s*(.+)$/);
-  if (!m) return res;
-  res.ok = true;
-  res.no = parseInt(m[1], 10);
-  res.print = m[2].trim();
-  res.prints = bot_countPrints(res.print);
+var BOT_PREFIX_RE_ = /^[\s❗‼⚠️!]*(терміново[\s:!—\-]*)?/i;
 
-  var badTtn = '';
+/** Рядок початку замовлення: «1538. Принт …», «1542 Принт …», «❗️ТЕРМІНОВО 1520. Принт …». → {no, rest} | null */
+function bot_orderStart_(line) {
+  var s = bot_trim(line).replace(BOT_PREFIX_RE_, '');
+  var m = s.match(/^(\d{1,6})(?:[.)]\s*|\s+(?=принт))(.+)$/i);
+  return m ? { no: parseInt(m[1], 10), rest: m[2].trim() } : null;
+}
+
+/** Непорожні рядки; рядки-«префікси» на кшталт «❗️ТЕРМІНОВО» прибираємо. */
+function bot_cleanLines_(text) {
+  return String(text || '').split(/\r?\n/).map(bot_trim).filter(function (l) {
+    return l !== '' && l.replace(BOT_PREFIX_RE_, '') !== '';
+  });
+}
+
+function bot_parseOrderSegment_(lines) {
+  var st = bot_orderStart_(lines[0]);
+  var res = {
+    ok: true, no: st.no, print: st.rest, prints: bot_countPrints(st.rest), type: '', typeAmbiguous: false, color: '',
+    size: '', placement: '', ttn: '', issues: [], ttnShared: false
+  };
+  var badTtn = '', extras = [];
   for (var i = 1; i < lines.length; i++) {
     var line = lines[i];
     var digits = line.replace(/[\s ]/g, '').replace(/^(ттн|тт|№)[:\-]?/i, '');
@@ -257,9 +268,12 @@ function bot_parseOrderCaption(text) {
       continue;
     }
     var pl = bot_normPlacement(line);
-    if (pl && !res.placement && /принт|спереду|позаду|візуал|перед|зад/i.test(line)) { res.placement = pl; continue; }
-    if (!res.color) { var c = bot_normColor(line); if (c && line.length <= 20) res.color = c; }
+    var strong = /принт|візуал/i.test(line) || /^\s*(спереду|позаду|попереду|ззаду)\s*$/i.test(line);
+    if (pl && strong) { if (!res.placement) res.placement = pl; continue; }
+    if (!res.color) { var c = bot_normColor(line); if (c && line.length <= 20) { res.color = c; continue; } }
+    extras.push(line);                                  // напр. «FC BARCA (PERED) W - ПЕРЕД» — опис принта
   }
+  if (/^принти?\s*$/i.test(res.print) && extras.length) res.print = res.print + ' ' + extras.join(' / ');
 
   if (!res.type) {
     res.issues.push({ field: 'type', text: res.typeAmbiguous ? 'Худі: не вказано «з флісом» чи «без флісу»' : 'не вказано вид речі (футболка / худі)' });
@@ -270,6 +284,34 @@ function bot_parseOrderCaption(text) {
     res.issues.push({ field: 'ttn', text: badTtn ? 'ТТН «' + badTtn + '» — не 14 цифр' : 'немає ТТН' });
   }
   return res;
+}
+
+/**
+ * Розбір повідомлення з групи → МАСИВ замовлень (одне повідомлення може містити кілька замовлень
+ * з однією спільною ТТН внизу). Порожній масив — це не замовлення (мовчки ігноруємо).
+ */
+function bot_parseOrderMessage(text) {
+  var lines = bot_cleanLines_(text);
+  if (!lines.length || !bot_orderStart_(lines[0])) return [];
+  var segs = [], cur = null;
+  lines.forEach(function (l) {
+    if (bot_orderStart_(l)) { cur = [l]; segs.push(cur); } else if (cur) cur.push(l);
+  });
+  var out = segs.map(bot_parseOrderSegment_);
+  for (var i = out.length - 2; i >= 0; i--) {           // спільна ТТН внизу діє на всі замовлення вище
+    if (!out[i].ttn && out[i + 1].ttn) {
+      out[i].ttn = out[i + 1].ttn; out[i].ttnShared = true;
+      out[i].issues = out[i].issues.filter(function (x) { return x.field !== 'ttn'; });
+    }
+  }
+  return out;
+}
+
+/** Перше замовлення з повідомлення (сумісність). */
+function bot_parseOrderCaption(text) {
+  var list = bot_parseOrderMessage(text);
+  if (list.length) return list[0];
+  return { ok: false, no: null, print: '', prints: 1, type: '', typeAmbiguous: false, color: '', size: '', placement: '', ttn: '', issues: [] };
 }
 
 // =====================================================================

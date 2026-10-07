@@ -338,8 +338,14 @@ function bot_normSize(v) {
   return BOT_SIZES.indexOf(s) >= 0 ? s : '';
 }
 
+/** Латинські літери-двійники → кириличні (менеджери іноді пишуть «cіра» з латинською c). */
+function bot_deLatin_(s) {
+  var map = { a: 'а', c: 'с', e: 'е', i: 'і', k: 'к', m: 'м', o: 'о', p: 'р', x: 'х', y: 'у', h: 'н', t: 'т', b: 'в' };
+  return String(s).replace(/[acekimopxyhtb]/g, function (ch) { return map[ch]; });
+}
+
 function bot_normColor(text) {
-  var t = bot_trim(text).toLowerCase();
+  var t = bot_deLatin_(bot_trim(text).toLowerCase());
   if (/чорн/.test(t)) return 'Чорний';
   if (/біл/.test(t)) return 'Білий';
   if (/сір|графіт/.test(t)) return 'Сірий';
@@ -352,12 +358,13 @@ function bot_normColor(text) {
  */
 function bot_parseTypeColor(text) {
   var t = bot_trim(text).toLowerCase();
+  if (/[а-яіїєґ]/.test(t)) t = bot_deLatin_(t);            // змішані латиниця + кирилиця → кирилиця
   var res = { type: '', color: bot_normColor(t), ambiguous: false, found: false };
   if (/футболк/.test(t)) { res.type = 'Футболка'; res.found = true; return res; }
   if (/худі|худи/.test(t)) {
     res.found = true;
     if (/без\s+фліс|не\s*утепл|без\s+утепл/.test(t)) res.type = 'Худі не утеплене';
-    else if (/з\s+фліс|флісом|утепл/.test(t)) res.type = 'Худі фліс';
+    else if (/фліс|утепл/.test(t)) res.type = 'Худі фліс';
     else res.ambiguous = true;
   }
   return res;
@@ -385,25 +392,29 @@ function bot_countPrints(printText) {
 // Розбір підпису замовлення з групи (розділ 4.2)
 // =====================================================================
 
-/**
- * @return {ok, no, print, prints, type, typeAmbiguous, color, size, placement, ttn, issues:[{field,text}]}
- *   ok=false — це не замовлення (мовчки ігноруємо).
- */
-function bot_parseOrderCaption(text) {
-  var res = {
-    ok: false, no: null, print: '', prints: 1, type: '', typeAmbiguous: false, color: '',
-    size: '', placement: '', ttn: '', issues: []
-  };
-  var lines = String(text || '').split(/\r?\n/).map(bot_trim).filter(function (l) { return l !== ''; });
-  if (!lines.length) return res;
-  var m = lines[0].match(/^(\d{1,6})[.)]\s*(.+)$/);
-  if (!m) return res;
-  res.ok = true;
-  res.no = parseInt(m[1], 10);
-  res.print = m[2].trim();
-  res.prints = bot_countPrints(res.print);
+var BOT_PREFIX_RE_ = /^[\s❗‼⚠️!]*(терміново[\s:!—\-]*)?/i;
 
-  var badTtn = '';
+/** Рядок початку замовлення: «1538. Принт …», «1542 Принт …», «❗️ТЕРМІНОВО 1520. Принт …». → {no, rest} | null */
+function bot_orderStart_(line) {
+  var s = bot_trim(line).replace(BOT_PREFIX_RE_, '');
+  var m = s.match(/^(\d{1,6})(?:[.)]\s*|\s+(?=принт))(.+)$/i);
+  return m ? { no: parseInt(m[1], 10), rest: m[2].trim() } : null;
+}
+
+/** Непорожні рядки; рядки-«префікси» на кшталт «❗️ТЕРМІНОВО» прибираємо. */
+function bot_cleanLines_(text) {
+  return String(text || '').split(/\r?\n/).map(bot_trim).filter(function (l) {
+    return l !== '' && l.replace(BOT_PREFIX_RE_, '') !== '';
+  });
+}
+
+function bot_parseOrderSegment_(lines) {
+  var st = bot_orderStart_(lines[0]);
+  var res = {
+    ok: true, no: st.no, print: st.rest, prints: bot_countPrints(st.rest), type: '', typeAmbiguous: false, color: '',
+    size: '', placement: '', ttn: '', issues: [], ttnShared: false
+  };
+  var badTtn = '', extras = [];
   for (var i = 1; i < lines.length; i++) {
     var line = lines[i];
     var digits = line.replace(/[\s ]/g, '').replace(/^(ттн|тт|№)[:\-]?/i, '');
@@ -422,9 +433,12 @@ function bot_parseOrderCaption(text) {
       continue;
     }
     var pl = bot_normPlacement(line);
-    if (pl && !res.placement && /принт|спереду|позаду|візуал|перед|зад/i.test(line)) { res.placement = pl; continue; }
-    if (!res.color) { var c = bot_normColor(line); if (c && line.length <= 20) res.color = c; }
+    var strong = /принт|візуал/i.test(line) || /^\s*(спереду|позаду|попереду|ззаду)\s*$/i.test(line);
+    if (pl && strong) { if (!res.placement) res.placement = pl; continue; }
+    if (!res.color) { var c = bot_normColor(line); if (c && line.length <= 20) { res.color = c; continue; } }
+    extras.push(line);                                  // напр. «FC BARCA (PERED) W - ПЕРЕД» — опис принта
   }
+  if (/^принти?\s*$/i.test(res.print) && extras.length) res.print = res.print + ' ' + extras.join(' / ');
 
   if (!res.type) {
     res.issues.push({ field: 'type', text: res.typeAmbiguous ? 'Худі: не вказано «з флісом» чи «без флісу»' : 'не вказано вид речі (футболка / худі)' });
@@ -435,6 +449,34 @@ function bot_parseOrderCaption(text) {
     res.issues.push({ field: 'ttn', text: badTtn ? 'ТТН «' + badTtn + '» — не 14 цифр' : 'немає ТТН' });
   }
   return res;
+}
+
+/**
+ * Розбір повідомлення з групи → МАСИВ замовлень (одне повідомлення може містити кілька замовлень
+ * з однією спільною ТТН внизу). Порожній масив — це не замовлення (мовчки ігноруємо).
+ */
+function bot_parseOrderMessage(text) {
+  var lines = bot_cleanLines_(text);
+  if (!lines.length || !bot_orderStart_(lines[0])) return [];
+  var segs = [], cur = null;
+  lines.forEach(function (l) {
+    if (bot_orderStart_(l)) { cur = [l]; segs.push(cur); } else if (cur) cur.push(l);
+  });
+  var out = segs.map(bot_parseOrderSegment_);
+  for (var i = out.length - 2; i >= 0; i--) {           // спільна ТТН внизу діє на всі замовлення вище
+    if (!out[i].ttn && out[i + 1].ttn) {
+      out[i].ttn = out[i + 1].ttn; out[i].ttnShared = true;
+      out[i].issues = out[i].issues.filter(function (x) { return x.field !== 'ttn'; });
+    }
+  }
+  return out;
+}
+
+/** Перше замовлення з повідомлення (сумісність). */
+function bot_parseOrderCaption(text) {
+  var list = bot_parseOrderMessage(text);
+  if (list.length) return list[0];
+  return { ok: false, no: null, print: '', prints: 1, type: '', typeAmbiguous: false, color: '', size: '', placement: '', ttn: '', issues: [] };
 }
 
 // =====================================================================
@@ -847,6 +889,29 @@ function bot_appendOrderRow(obj, yellowKeys) {
     sh.getRange(rowNum, 1, 1, width).setBackground(null).setValues([arr]);
     bot_markYellow_(sh, map, rowNum, yellowKeys || []);
     return rowNum;
+  });
+}
+
+/** Пакетне додавання рядків (імпорт): items = [{obj, yellow:[ключі]}]. Повертає номери рядків. */
+function bot_appendOrderRows(items) {
+  if (!items.length) return [];
+  return bot_withLock(function () {
+    var sh = bot_ordersSheet();
+    var map = bot_ordersMap(sh);
+    var start = bot_nextOrderRow_(sh, map);
+    var width = sh.getLastColumn();
+    bot_ensureRow_(sh, start + items.length);
+    var arr = items.map(function (it) {
+      var line = []; for (var i = 0; i < width; i++) line.push('');
+      BOT_ORDER_COLS.forEach(function (c) {
+        if (map[c[0]] && it.obj[c[0]] !== undefined && it.obj[c[0]] !== null) line[map[c[0]] - 1] = it.obj[c[0]];
+      });
+      return line;
+    });
+    if (map.ttn) sh.getRange(start, map.ttn, items.length, 1).setNumberFormat('@');
+    sh.getRange(start, 1, items.length, width).setBackground(null).setValues(arr);
+    items.forEach(function (it, i) { if (it.yellow && it.yellow.length) bot_markYellow_(sh, map, start + i, it.yellow); });
+    return items.map(function (it, i) { return start + i; });
   });
 }
 
@@ -1342,68 +1407,79 @@ function bot_buildOrderFields_(p, orderDate, priceRows, status) {
   };
 }
 
-/** Обробка повідомлення з гілки «Замовлення на клієнта». */
+/** Ключ рядка в колонці msg_id: перше замовлення повідомлення — його message_id, наступні — «id.1», «id.2». */
+function bot_msgKey(mid, idx) { return idx === 0 ? String(mid) : mid + '.' + idx; }
+
+/** Обробка повідомлення з гілки «Замовлення на клієнта» (може містити кілька замовлень). */
 function bot_handleOrderMessage(msg, caption, edited) {
-  var p = bot_parseOrderCaption(caption);
-  if (!p.ok) return;                                              // не замовлення — мовчки ігноруємо
+  var list = bot_parseOrderMessage(caption);
+  if (!list.length) return;                                       // не замовлення — мовчки ігноруємо
   var chat = msg.chat, mid = String(msg.message_id), thread = bot_threadOf(msg);
   var link = bot_msgLink(chat, thread, msg.message_id);
   var linkTxt = link ? '\n<a href="' + link + '">Відкрити повідомлення</a>' : '';
 
   bot_withLock(function () {
     var orders = bot_readOrders();
-    var existing = null;
-    orders.forEach(function (o) { if (o.msgId === mid) existing = o; });
     var priceRows = bot_readPriceRows();
-    var orderDate = existing && existing.date ? existing.date : bot_orderDateOf_(msg);
+    var react = null;                                              // реакція на повідомлення: 👌 або ✍ (одна на все повідомлення)
 
-    // ---- повторна обробка того самого повідомлення ----
-    if (existing && !edited) return;
+    list.forEach(function (p, idx) {
+      var key = bot_msgKey(mid, idx);
+      var existing = null;
+      orders.forEach(function (o) { if (o.msgId === key) existing = o; });
+      var orderDate = existing && existing.date ? existing.date : bot_orderDateOf_(msg);
 
-    // ---- редагування ----
-    if (existing && edited) {
-      if (existing.paid === 'Оплачено') {
-        bot_sendToOwners('⚠️ Замовлення №' + existing.no + ' вже оплачено — редагування в групі я не застосовую. Змініть таблицю вручну, якщо треба.' + linkTxt);
+      // ---- повторна обробка того самого повідомлення ----
+      if (existing && !edited) return;
+
+      // ---- редагування ----
+      if (existing && edited) {
+        if (existing.paid === 'Оплачено') {
+          bot_sendToOwners('⚠️ Замовлення №' + existing.no + ' вже оплачено — редагування в групі я не застосовую. Змініть таблицю вручну, якщо треба.' + linkTxt);
+          return;
+        }
+        var clash = orders.filter(function (o) { return o.no === p.no && o._row !== existing._row; });
+        if (clash.length) {
+          bot_sendToOwners('⚠️ Після редагування номер №' + p.no + ' збігається з іншим рядком таблиці. Не змінюю.' + linkTxt);
+          return;
+        }
+        var built = bot_buildOrderFields_(p, orderDate, priceRows, existing.status);
+        var f = built.fields;
+        if (existing.status !== 'В роботі') delete f.cost;
+        f.note = bot_mergeNote_(existing.note, built.issues);
+        if (existing.ttn !== p.ttn) {                               // ТТН змінилась — старі дані НП недійсні
+          f.stage = p.ttn ? '' : 'Немає ТТН'; f.npStatus = ''; f.ttnDate = ''; f.handoff = ''; f.arrived = '';
+          if (p.ttn) BOT_NEW_TTN_ROWS_.push(existing._row);
+        }
+        bot_patchOrders([{ row: existing._row, fields: f }]);
+        bot_clearYellow(existing._row, ['type', 'color', 'size', 'ttn', 'cost']);
+        var sh = bot_ordersSheet(), map = bot_ordersMap(sh);
+        bot_markYellow_(sh, map, existing._row, built.yellow);
+        if (react !== '✍') react = built.issues.length ? '✍' : '👌';
+        if (built.issues.length) bot_sendToOwners('✍️ №' + p.no + ' оновлено, але ще не вистачає: ' + bot_esc(built.issues.join(', ')) + '.' + linkTxt);
         return;
       }
-      var clash = orders.filter(function (o) { return o.no === p.no && o._row !== existing._row; });
-      if (clash.length) {
-        bot_sendToOwners('⚠️ Після редагування номер №' + p.no + ' збігається з іншим рядком таблиці. Не змінюю.' + linkTxt);
+
+      // ---- нове замовлення ----
+      var dup = orders.filter(function (o) { return o.no === p.no; });
+      if (dup.length) {
+        bot_sendToOwners('⚠️ Дубль: замовлення №' + p.no + ' уже є в таблиці (рядок ' + dup[0]._row + '). Новий рядок не додаю.' + linkTxt);
         return;
       }
-      var built = bot_buildOrderFields_(p, orderDate, priceRows, existing.status);
-      var f = built.fields;
-      if (existing.status !== 'В роботі') delete f.cost;
-      f.note = bot_mergeNote_(existing.note, built.issues);
-      if (existing.ttn !== p.ttn) {                               // ТТН змінилась — старі дані НП недійсні
-        f.stage = p.ttn ? '' : 'Немає ТТН'; f.npStatus = ''; f.ttnDate = ''; f.handoff = ''; f.arrived = '';
-        if (p.ttn) BOT_NEW_TTN_ROWS_.push(existing._row);
-      }
-      bot_patchOrders([{ row: existing._row, fields: f }]);
-      bot_clearYellow(existing._row, ['type', 'color', 'size', 'ttn', 'cost']);
-      var sh = bot_ordersSheet(), map = bot_ordersMap(sh);
-      bot_markYellow_(sh, map, existing._row, built.yellow);
-      bot_react(chat.id, msg.message_id, built.issues.length ? '✍' : '👌');
-      if (built.issues.length) bot_sendToOwners('✍️ №' + p.no + ' оновлено, але ще не вистачає: ' + bot_esc(built.issues.join(', ')) + '.' + linkTxt);
-      return;
-    }
+      var b = bot_buildOrderFields_(p, orderDate, priceRows, 'В роботі');
+      var row = b.fields;
+      row.stage = p.ttn ? '' : 'Немає ТТН';
+      row.status = 'В роботі'; row.paid = 'Не оплачено'; row.msgId = key;
+      row.note = b.issues.length ? BOT_NOTE_PREFIX_ + b.issues.join(', ') : '';
+      var rowNum = bot_appendOrderRow(row, b.yellow);
+      orders.push({ _row: rowNum, no: p.no, msgId: key });
+      if (p.ttn) BOT_NEW_TTN_ROWS_.push(rowNum);
+      bot_log('ІНФО', 'замовлення №' + p.no, 'рядок ' + rowNum + (b.issues.length ? ' · ' + b.issues.join(', ') : ''));
+      if (react !== '✍') react = b.issues.length ? '✍' : '👌';
+      if (b.issues.length) bot_sendToOwners('✍️ Замовлення №' + p.no + ' додано, але: ' + bot_esc(b.issues.join(', ')) + '. Клітинки в таблиці підсвічені жовтим.' + linkTxt);
+    });
 
-    // ---- нове повідомлення ----
-    var dup = orders.filter(function (o) { return o.no === p.no; });
-    if (dup.length) {
-      bot_sendToOwners('⚠️ Дубль: замовлення №' + p.no + ' уже є в таблиці (рядок ' + dup[0]._row + '). Новий рядок не додаю.' + linkTxt);
-      return;
-    }
-    var b = bot_buildOrderFields_(p, orderDate, priceRows, 'В роботі');
-    var row = b.fields;
-    row.stage = p.ttn ? '' : 'Немає ТТН';
-    row.status = 'В роботі'; row.paid = 'Не оплачено'; row.msgId = mid;
-    row.note = b.issues.length ? BOT_NOTE_PREFIX_ + b.issues.join(', ') : '';
-    var rowNum = bot_appendOrderRow(row, b.yellow);
-    if (p.ttn) BOT_NEW_TTN_ROWS_.push(rowNum);
-    bot_log('ІНФО', 'замовлення №' + p.no, 'рядок ' + rowNum + (b.issues.length ? ' · ' + b.issues.join(', ') : ''));
-    bot_react(chat.id, msg.message_id, b.issues.length ? '✍' : '👌');
-    if (b.issues.length) bot_sendToOwners('✍️ Замовлення №' + p.no + ' додано, але: ' + bot_esc(b.issues.join(', ')) + '. Клітинки в таблиці підсвічені жовтим.' + linkTxt);
+    if (react) bot_react(chat.id, msg.message_id, react);
   });
 }
 
@@ -3601,6 +3677,179 @@ function bot_importReportText(rep, forTelegram) {
 }
 
 
+// ======================= TgImport.gs =======================
+/**
+ * TgImport.gs — разовий імпорт замовлень з експорту історії чату Telegram Desktop (messages.html).
+ * Потрібно, бо боти не бачать старих повідомлень групи. Розбір — чиста логіка (перевіряється в Node),
+ * далі — читання файлу з Google Диска і запис у «Замовлення».
+ *
+ * Ті самі правила, що й для живих замовлень: bot_parseOrderMessage (кілька замовлень в одному
+ * повідомленні, спільна ТТН, номер без крапки, «ТЕРМІНОВО»). Ключ msg_id рядка = id повідомлення Telegram
+ * (для 2-го і далі замовлень у повідомленні — «id.1», «id.2»), тож згодом редагування в групі оновлюють той самий рядок.
+ */
+
+var BOT_UA_MONTHS_GEN_ = ['січня', 'лютого', 'березня', 'квітня', 'травня', 'червня', 'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня'];
+
+function bot_decodeEntities(s) {
+  return String(s)
+    .replace(/&#x([0-9a-f]+);/gi, function (m, h) { return String.fromCodePoint(parseInt(h, 16)); })
+    .replace(/&#(\d+);/g, function (m, d) { return String.fromCodePoint(parseInt(d, 10)); })
+    .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+}
+
+/** «3 жовтня 2026, 13:19:40» → Date (за Києвом). */
+function bot_parseUaDate(str) {
+  var m = String(str || '').match(/(\d{1,2})\s+([а-яіїєґ]+)\s+(\d{4})(?:,?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?)?/i);
+  if (!m) return null;
+  var mon = BOT_UA_MONTHS_GEN_.indexOf(m[2].toLowerCase());
+  if (mon < 0) return null;
+  var base = bot_makeDate(+m[3], mon + 1, +m[1]);
+  return new Date(base.getTime() + (((+m[4] || 0) * 60 + (+m[5] || 0)) * 60 + (+m[6] || 0)) * 1000);
+}
+
+function bot_htmlToText_(h) {
+  return bot_decodeEntities(String(h).replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''));
+}
+
+/** messages.html → [{id, service, text, date, replyTo, from, edited}] */
+function bot_parseTelegramExport(html) {
+  var blocks = String(html).split('<div class="message ').slice(1);
+  var out = [];
+  blocks.forEach(function (b) {
+    var idm = b.match(/id="message(-?\d+)"/);
+    if (!idm) return;
+    var isService = /^service/.test(b);
+    var msg = { id: parseInt(idm[1], 10), service: '', text: '', date: null, replyTo: null, from: '', edited: false };
+    if (isService) {
+      var sm = b.match(/<div class="body details">\s*([\s\S]*?)\s*<\/div>/);
+      msg.service = sm ? bot_htmlToText_(sm[1]).replace(/\s+/g, ' ').trim() : '';
+    } else {
+      var tm = b.match(/<div class="text">\s*([\s\S]*?)\s*<\/div>/);
+      msg.text = tm ? bot_htmlToText_(tm[1]) : '';
+      var fm = b.match(/<div class="from_name">\s*([\s\S]*?)\s*<\/div>/);
+      msg.from = fm ? bot_htmlToText_(fm[1]).trim() : '';
+      var rm = b.match(/GoToMessage\((\d+)\)/);
+      msg.replyTo = rm ? parseInt(rm[1], 10) : null;
+      var dm = b.match(/class="pull_right date details" title="([^"]+)"([^>]*)>([^<]*)/);
+      if (dm) { msg.date = bot_parseUaDate(dm[1]); msg.edited = /edited|змінено|ред/i.test(dm[3]); }
+    }
+    out.push(msg);
+  });
+  return out;
+}
+
+/**
+ * Бере з експорту замовлення, яких ще немає в таблиці.
+ * @param opts {afterNo — пропускаємо № ≤ цього, existingNos — масив № що вже є, priceRows, threadName}
+ */
+function bot_planTelegramImport(messages, opts) {
+  opts = opts || {};
+  var threadName = opts.threadName || 'Замовлення на клієнта';
+  var existing = {}; (opts.existingNos || []).forEach(function (n) { existing[n] = true; });
+  var afterNo = opts.afterNo || 0;
+  var byId = {}; messages.forEach(function (m) { byId[m.id] = m; });
+  var rootId = null;
+  messages.forEach(function (m) {
+    if (rootId === null && m.service && /Створено гілку/.test(m.service) && m.service.indexOf(threadName) >= 0) rootId = m.id;
+  });
+  function inThread(m) {
+    if (rootId === null) return true;
+    var cur = m, hops = 0;
+    while (cur && hops++ < 30) {
+      if (cur.replyTo === rootId) return true;
+      cur = cur.replyTo !== null ? byId[cur.replyTo] : null;
+    }
+    return false;
+  }
+
+  var plan = { rootFound: rootId !== null, rows: [], skippedOld: 0, skippedExisting: 0, repeats: 0, sharedTtn: 0, problems: [], gaps: [], firstNo: null, lastNo: null };
+  var seen = {};
+  messages.slice().sort(function (a, b) { return a.id - b.id; }).forEach(function (m) {
+    if (m.service || !m.text || !inThread(m)) return;
+    var list = bot_parseOrderMessage(m.text);
+    list.forEach(function (p, idx) {
+      if (seen[p.no]) { plan.repeats++; return; }               // повторна публікація (напр. «ТЕРМІНОВО») — лишаємо першу
+      seen[p.no] = true;
+      if (p.no <= afterNo) { plan.skippedOld++; return; }
+      if (existing[p.no]) { plan.skippedExisting++; return; }
+      var d = m.date || new Date();
+      var kp = bot_kyivParts(d);
+      var orderDate = bot_makeDate(kp.y, kp.m, kp.d);
+      var b = bot_buildOrderFields_(p, orderDate, opts.priceRows || [], 'В роботі');
+      var row = b.fields;
+      row.stage = p.ttn ? '' : 'Немає ТТН';
+      row.status = 'В роботі'; row.paid = 'Не оплачено'; row.msgId = bot_msgKey(m.id, idx);
+      row.note = b.issues.length ? BOT_NOTE_PREFIX_ + b.issues.join(', ') : '';
+      if (p.ttnShared) plan.sharedTtn++;
+      plan.rows.push({ obj: row, yellow: b.yellow, issues: b.issues, no: p.no, tgId: m.id, hasTtn: !!p.ttn });
+      if (b.issues.length) plan.problems.push('№' + p.no + ': ' + b.issues.join(', '));
+    });
+  });
+  var nos = plan.rows.map(function (r) { return r.no; });
+  if (nos.length) {
+    plan.firstNo = Math.min.apply(null, nos); plan.lastNo = Math.max.apply(null, nos);
+    var have = {}; nos.forEach(function (n) { have[n] = true; });
+    for (var n = Math.max(plan.firstNo, afterNo + 1); n <= plan.lastNo; n++) if (!have[n] && !existing[n] && !seen[n]) plan.gaps.push(n);
+  }
+  return plan;
+}
+
+function bot_tgImportReportText(plan, forTelegram, done) {
+  var L = [];
+  L.push(done ? '📥 Імпорт замовлень з Telegram завершено' : 'Знайдено в експорті');
+  L.push((done ? 'Додано' : 'Буде додано') + ' замовлень: ' + plan.rows.length + (plan.rows.length ? ' (№' + plan.firstNo + '–№' + plan.lastNo + ')' : ''));
+  if (plan.sharedTtn) L.push('З них зі спільною ТТН на кілька замовлень: ' + plan.sharedTtn);
+  L.push('Пропущено: уже в таблиці ' + plan.skippedExisting + ', старіші за останній № ' + plan.skippedOld + ', повторні публікації ' + plan.repeats);
+  if (!plan.rootFound) L.push('⚠️ Не знайшов у файлі гілку «Замовлення на клієнта» — взяв усі повідомлення.');
+  if (plan.gaps.length) L.push('Номери, яких немає в чаті: ' + plan.gaps.join(', '));
+  L.push(plan.problems.length ? 'Рядки з проблемами (' + plan.problems.length + ', клітинки жовті, див. «Примітка»):' : 'Проблем у рядках немає.');
+  plan.problems.slice(0, 25).forEach(function (p) { L.push('• ' + p); });
+  if (plan.problems.length > 25) L.push('… і ще ' + (plan.problems.length - 25));
+  return forTelegram ? L.map(function (l) { return bot_esc(l); }).join('\n') : L.join('\n');
+}
+
+// =====================================================================
+// Google: читання файлів з Диска і запис
+// =====================================================================
+
+function bot_driveIdFromUrl(url) {
+  var m = String(url).match(/\/d\/([-\w]{15,})/) || String(url).match(/[?&]id=([-\w]{15,})/) || String(url).match(/^([-\w]{25,})$/);
+  return m ? m[1] : '';
+}
+
+/** urls — рядок з одним або кількома посиланнями (messages.html, messages2.html …). */
+function bot_tgImportPlan(urls) {
+  var ids = String(urls).split(/[\s,;]+/).filter(Boolean).map(bot_driveIdFromUrl);
+  if (!ids.length || ids.some(function (x) { return !x; })) throw new Error('Не схоже на посилання на файл Google Диска. Завантажте messages.html на Диск → ПКМ → «Надати доступ / Копіювати посилання».');
+  var messages = [];
+  ids.forEach(function (id) {
+    var html = DriveApp.getFileById(id).getBlob().getDataAsString('UTF-8');
+    if (html.indexOf('class="message ') < 0) throw new Error('У файлі немає повідомлень Telegram. Потрібен messages.html з експорту історії чату (формат HTML).');
+    messages = messages.concat(bot_parseTelegramExport(html));
+  });
+  var orders = bot_readOrders();
+  var nos = orders.map(function (o) { return o.no; }).filter(function (n) { return n !== ''; });
+  var maxNo = nos.reduce(function (a, n) { return Math.max(a, Number(n) || 0); }, 0);
+  var plan = bot_planTelegramImport(messages, { afterNo: maxNo, existingNos: nos, priceRows: bot_readPriceRows() });
+  plan.afterNo = maxNo;
+  return plan;
+}
+
+function bot_tgImportApply(plan) {
+  var rowNums = bot_withLock(function () {
+    var nos = {}; bot_readOrders().forEach(function (o) { nos[o.no] = true; });       // перевірка ще раз під блокуванням
+    var items = plan.rows.filter(function (r) { return !nos[r.no]; });
+    var rows = bot_appendOrderRows(items);
+    bot_log('ІНФО', 'імпорт з Telegram', 'додано ' + items.length + ' замовлень');
+    return rows;
+  });
+  if (rowNums.length && bot_prop(BOT_PROP.NP_KEY)) {
+    try { bot_npUpdate({ rows: rowNums, maxTtn: 3000 }); } catch (e) { bot_log('ПОМИЛКА', 'НП після імпорту з Telegram', e.message); }
+  }
+  return { added: rowNums.length, rows: rowNums };
+}
+
+
 // ======================= Menu.gs =======================
 /**
  * Menu.gs — меню «🤖 Бот» у таблиці: перше налаштування, токени, імпорт, увімкнення/вимкнення, перевірка.
@@ -3627,6 +3876,7 @@ function onOpen() {
     .addItem('Ввести ключ Нової пошти', 'bot_menuNpKey')
     .addSeparator()
     .addItem('Імпорт з попередньої версії', 'bot_menuImport')
+    .addItem('Імпорт замовлень з експорту Telegram', 'bot_menuTgImport')
     .addSeparator()
     .addItem('Увімкнути бота', 'bot_menuEnable')
     .addItem('Вимкнути бота', 'bot_menuDisable')
@@ -3739,6 +3989,27 @@ function bot_menuImport() {
     var rep = bot_importFromUrl(url);
     bot_alert_('Імпорт завершено', bot_importReportText(rep, false));
     if (bot_ownerIds().length && bot_prop(BOT_PROP.TG_TOKEN)) bot_sendToOwners(bot_importReportText(rep, true));
+  } catch (e) { bot_alert_('Імпорт не вдався', e.message); }
+}
+
+// ---------- імпорт замовлень з експорту Telegram ----------
+
+function bot_menuTgImport() {
+  var ui = bot_ui_();
+  var r = ui.prompt('Імпорт замовлень з експорту Telegram',
+    'Вставте посилання на файл messages.html (він має лежати на вашому Google Диску). Якщо файлів кілька (messages.html, messages2.html…) — вставте всі посилання через пробіл.', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  try {
+    bot_ss().toast('Читаю файл…', '🤖 Бот', 60);
+    var plan = bot_tgImportPlan(r.getResponseText());
+    if (!plan.rows.length) { bot_alert_('Нових замовлень немає', bot_tgImportReportText(plan, false, false)); return; }
+    var go = ui.alert('Додати замовлення?', 'Останній номер у таблиці: ' + plan.afterNo + '.\n\n' + bot_tgImportReportText(plan, false, false) + '\n\nДодати їх у таблицю?', ui.ButtonSet.YES_NO);
+    if (go !== ui.Button.YES) return;
+    bot_ss().toast('Додаю замовлення…', '🤖 Бот', 60);
+    bot_tgImportApply(plan);
+    var text = bot_tgImportReportText(plan, false, true);
+    bot_alert_('Готово', text);
+    if (bot_ownerIds().length && bot_prop(BOT_PROP.TG_TOKEN)) bot_sendToOwners(bot_tgImportReportText(plan, true, true));
   } catch (e) { bot_alert_('Імпорт не вдався', e.message); }
 }
 

@@ -122,7 +122,7 @@ function newEnv(opts) {
       parseCsv: (t, d) => t.trim().split('\n').map(l => l.split(d || ','))
     },
     Session: noop(), Logger: { log() {} }, MimeType: { GOOGLE_SHEETS: 'sheet' },
-    DriveApp: { getFileById: () => ({ getParents: () => ({ hasNext: () => false }) }), getRootFolder: () => folder, getFolderById: () => folder },
+    DriveApp: { getFileById: (id) => ({ getParents: () => ({ hasNext: () => false }), getBlob: () => ({ getDataAsString: () => { if (!(opts.driveFiles || {})[id]) throw new Error('Немає доступу до файлу ' + id); return opts.driveFiles[id]; } }) }), getRootFolder: () => folder, getFolderById: () => folder },
     ScriptApp: { getProjectTriggers: () => [], newTrigger: () => noop(), deleteTrigger() {} }
   };
   g.SpreadsheetApp.getUi = () => ({ alert() {}, prompt: () => noop(), createMenu: () => noop(), Button: {}, ButtonSet: {} });

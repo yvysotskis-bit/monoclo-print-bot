@@ -51,68 +51,79 @@ function bot_buildOrderFields_(p, orderDate, priceRows, status) {
   };
 }
 
-/** Обробка повідомлення з гілки «Замовлення на клієнта». */
+/** Ключ рядка в колонці msg_id: перше замовлення повідомлення — його message_id, наступні — «id.1», «id.2». */
+function bot_msgKey(mid, idx) { return idx === 0 ? String(mid) : mid + '.' + idx; }
+
+/** Обробка повідомлення з гілки «Замовлення на клієнта» (може містити кілька замовлень). */
 function bot_handleOrderMessage(msg, caption, edited) {
-  var p = bot_parseOrderCaption(caption);
-  if (!p.ok) return;                                              // не замовлення — мовчки ігноруємо
+  var list = bot_parseOrderMessage(caption);
+  if (!list.length) return;                                       // не замовлення — мовчки ігноруємо
   var chat = msg.chat, mid = String(msg.message_id), thread = bot_threadOf(msg);
   var link = bot_msgLink(chat, thread, msg.message_id);
   var linkTxt = link ? '\n<a href="' + link + '">Відкрити повідомлення</a>' : '';
 
   bot_withLock(function () {
     var orders = bot_readOrders();
-    var existing = null;
-    orders.forEach(function (o) { if (o.msgId === mid) existing = o; });
     var priceRows = bot_readPriceRows();
-    var orderDate = existing && existing.date ? existing.date : bot_orderDateOf_(msg);
+    var react = null;                                              // реакція на повідомлення: 👌 або ✍ (одна на все повідомлення)
 
-    // ---- повторна обробка того самого повідомлення ----
-    if (existing && !edited) return;
+    list.forEach(function (p, idx) {
+      var key = bot_msgKey(mid, idx);
+      var existing = null;
+      orders.forEach(function (o) { if (o.msgId === key) existing = o; });
+      var orderDate = existing && existing.date ? existing.date : bot_orderDateOf_(msg);
 
-    // ---- редагування ----
-    if (existing && edited) {
-      if (existing.paid === 'Оплачено') {
-        bot_sendToOwners('⚠️ Замовлення №' + existing.no + ' вже оплачено — редагування в групі я не застосовую. Змініть таблицю вручну, якщо треба.' + linkTxt);
+      // ---- повторна обробка того самого повідомлення ----
+      if (existing && !edited) return;
+
+      // ---- редагування ----
+      if (existing && edited) {
+        if (existing.paid === 'Оплачено') {
+          bot_sendToOwners('⚠️ Замовлення №' + existing.no + ' вже оплачено — редагування в групі я не застосовую. Змініть таблицю вручну, якщо треба.' + linkTxt);
+          return;
+        }
+        var clash = orders.filter(function (o) { return o.no === p.no && o._row !== existing._row; });
+        if (clash.length) {
+          bot_sendToOwners('⚠️ Після редагування номер №' + p.no + ' збігається з іншим рядком таблиці. Не змінюю.' + linkTxt);
+          return;
+        }
+        var built = bot_buildOrderFields_(p, orderDate, priceRows, existing.status);
+        var f = built.fields;
+        if (existing.status !== 'В роботі') delete f.cost;
+        f.note = bot_mergeNote_(existing.note, built.issues);
+        if (existing.ttn !== p.ttn) {                               // ТТН змінилась — старі дані НП недійсні
+          f.stage = p.ttn ? '' : 'Немає ТТН'; f.npStatus = ''; f.ttnDate = ''; f.handoff = ''; f.arrived = '';
+          if (p.ttn) BOT_NEW_TTN_ROWS_.push(existing._row);
+        }
+        bot_patchOrders([{ row: existing._row, fields: f }]);
+        bot_clearYellow(existing._row, ['type', 'color', 'size', 'ttn', 'cost']);
+        var sh = bot_ordersSheet(), map = bot_ordersMap(sh);
+        bot_markYellow_(sh, map, existing._row, built.yellow);
+        if (react !== '✍') react = built.issues.length ? '✍' : '👌';
+        if (built.issues.length) bot_sendToOwners('✍️ №' + p.no + ' оновлено, але ще не вистачає: ' + bot_esc(built.issues.join(', ')) + '.' + linkTxt);
         return;
       }
-      var clash = orders.filter(function (o) { return o.no === p.no && o._row !== existing._row; });
-      if (clash.length) {
-        bot_sendToOwners('⚠️ Після редагування номер №' + p.no + ' збігається з іншим рядком таблиці. Не змінюю.' + linkTxt);
+
+      // ---- нове замовлення ----
+      var dup = orders.filter(function (o) { return o.no === p.no; });
+      if (dup.length) {
+        bot_sendToOwners('⚠️ Дубль: замовлення №' + p.no + ' уже є в таблиці (рядок ' + dup[0]._row + '). Новий рядок не додаю.' + linkTxt);
         return;
       }
-      var built = bot_buildOrderFields_(p, orderDate, priceRows, existing.status);
-      var f = built.fields;
-      if (existing.status !== 'В роботі') delete f.cost;
-      f.note = bot_mergeNote_(existing.note, built.issues);
-      if (existing.ttn !== p.ttn) {                               // ТТН змінилась — старі дані НП недійсні
-        f.stage = p.ttn ? '' : 'Немає ТТН'; f.npStatus = ''; f.ttnDate = ''; f.handoff = ''; f.arrived = '';
-        if (p.ttn) BOT_NEW_TTN_ROWS_.push(existing._row);
-      }
-      bot_patchOrders([{ row: existing._row, fields: f }]);
-      bot_clearYellow(existing._row, ['type', 'color', 'size', 'ttn', 'cost']);
-      var sh = bot_ordersSheet(), map = bot_ordersMap(sh);
-      bot_markYellow_(sh, map, existing._row, built.yellow);
-      bot_react(chat.id, msg.message_id, built.issues.length ? '✍' : '👌');
-      if (built.issues.length) bot_sendToOwners('✍️ №' + p.no + ' оновлено, але ще не вистачає: ' + bot_esc(built.issues.join(', ')) + '.' + linkTxt);
-      return;
-    }
+      var b = bot_buildOrderFields_(p, orderDate, priceRows, 'В роботі');
+      var row = b.fields;
+      row.stage = p.ttn ? '' : 'Немає ТТН';
+      row.status = 'В роботі'; row.paid = 'Не оплачено'; row.msgId = key;
+      row.note = b.issues.length ? BOT_NOTE_PREFIX_ + b.issues.join(', ') : '';
+      var rowNum = bot_appendOrderRow(row, b.yellow);
+      orders.push({ _row: rowNum, no: p.no, msgId: key });
+      if (p.ttn) BOT_NEW_TTN_ROWS_.push(rowNum);
+      bot_log('ІНФО', 'замовлення №' + p.no, 'рядок ' + rowNum + (b.issues.length ? ' · ' + b.issues.join(', ') : ''));
+      if (react !== '✍') react = b.issues.length ? '✍' : '👌';
+      if (b.issues.length) bot_sendToOwners('✍️ Замовлення №' + p.no + ' додано, але: ' + bot_esc(b.issues.join(', ')) + '. Клітинки в таблиці підсвічені жовтим.' + linkTxt);
+    });
 
-    // ---- нове повідомлення ----
-    var dup = orders.filter(function (o) { return o.no === p.no; });
-    if (dup.length) {
-      bot_sendToOwners('⚠️ Дубль: замовлення №' + p.no + ' уже є в таблиці (рядок ' + dup[0]._row + '). Новий рядок не додаю.' + linkTxt);
-      return;
-    }
-    var b = bot_buildOrderFields_(p, orderDate, priceRows, 'В роботі');
-    var row = b.fields;
-    row.stage = p.ttn ? '' : 'Немає ТТН';
-    row.status = 'В роботі'; row.paid = 'Не оплачено'; row.msgId = mid;
-    row.note = b.issues.length ? BOT_NOTE_PREFIX_ + b.issues.join(', ') : '';
-    var rowNum = bot_appendOrderRow(row, b.yellow);
-    if (p.ttn) BOT_NEW_TTN_ROWS_.push(rowNum);
-    bot_log('ІНФО', 'замовлення №' + p.no, 'рядок ' + rowNum + (b.issues.length ? ' · ' + b.issues.join(', ') : ''));
-    bot_react(chat.id, msg.message_id, b.issues.length ? '✍' : '👌');
-    if (b.issues.length) bot_sendToOwners('✍️ Замовлення №' + p.no + ' додано, але: ' + bot_esc(b.issues.join(', ')) + '. Клітинки в таблиці підсвічені жовтим.' + linkTxt);
+    if (react) bot_react(chat.id, msg.message_id, react);
   });
 }
 
