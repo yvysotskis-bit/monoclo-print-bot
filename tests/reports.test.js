@@ -20,17 +20,17 @@ test('Ранковий звіт: приклад з ТЗ — порядок, ❗�
   const msgs = B.bot_buildMorningReport(orders, NOW, { warnDays: 3 });
   assert.equal(msgs.length, 1);
   const t = msgs[0];
-  assert.match(t, /Не передані до відправки — 3 ТТН<\/b> · середа, 07\.10/);
-  assert.ok(t.indexOf('20451548987230') < t.indexOf('20451549653731') && t.indexOf('20451549653731') < t.indexOf('20451550732615'));
+  assert.match(t, /Не передані до відправки 3\+ дні — 2 ТТН<\/b> · середа, 07\.10/);
+  assert.ok(t.indexOf('20451548987230') < t.indexOf('20451549653731'));
+  assert.ok(!t.includes('20451550732615'), 'ТТН віком 1 день (менше 3) у звіт не потрапляє');
   assert.match(t, /1\. <code>20451548987230<\/code> · створена 01\.10 · ❗️6 дн\./);
   assert.match(t, /2\. <code>20451549653731<\/code> · створена 02\.10 · ❗️5 дн\./);
-  assert.match(t, /3\. <code>20451550732615<\/code> · створена 06\.10 · 1 дн\./);
   assert.ok(t.includes('№1465 — Принт — Dnipro · Футболка чорна · L') && t.includes('№1466 — Принт Mariupol · Футболка біла · S'));
   assert.ok(t.indexOf('№1465') < t.indexOf('№1466'));
 });
 
-test('Ранковий звіт: порожньо → «✅ Усі ТТН передані», довгий — кілька повідомлень без розриву пункту', () => {
-  assert.deepEqual(Array.from(B.bot_buildMorningReport([], NOW)), ['✅ Усі ТТН передані до відправки']);
+test('Ранковий звіт: порожньо → «Немає ТТН, не переданих 3+ дні», довгий — кілька повідомлень без розриву пункту', () => {
+  assert.deepEqual(Array.from(B.bot_buildMorningReport([], NOW)), ['✅ Немає ТТН, не переданих 3+ дні']);
   const many = Array.from({ length: 120 }, (_, i) => mk({ no: i + 1, ttn: String(20451500000000 + i), ttnDate: D(2026, 10, 1) }));
   const msgs = B.bot_buildMorningReport(many, NOW);
   assert.ok(msgs.length > 1);
@@ -39,9 +39,9 @@ test('Ранковий звіт: порожньо → «✅ Усі ТТН пер
 });
 
 test('Ранковий звіт: без дати створення — за датою замовлення, потім за №; HTML екранується', () => {
-  const orders = [mk({ no: 20, ttn: '1', date: D(2026, 10, 5), print: 'A<B' }), mk({ no: 10, ttn: '2', date: D(2026, 10, 3) }), mk({ no: 5, ttn: '3' })];
+  const orders = [mk({ no: 20, ttn: '1', date: D(2026, 10, 2), print: 'A<B' }), mk({ no: 10, ttn: '2', date: D(2026, 10, 3) }), mk({ no: 5, ttn: '3' })];
   const t = B.bot_buildMorningReport(orders, NOW)[0];
-  assert.ok(t.indexOf('<code>2</code>') < t.indexOf('<code>1</code>') && t.indexOf('<code>1</code>') < t.indexOf('<code>3</code>'));
+  assert.ok(t.indexOf('<code>1</code>') < t.indexOf('<code>2</code>') && t.indexOf('<code>2</code>') < t.indexOf('<code>3</code>'));
   assert.ok(t.includes('A&lt;B'));
 });
 
@@ -124,4 +124,19 @@ test('Топ принтів на старих даних: загальні «н�
   assert.equal(B.bot_printDesign('Принт нижче'), '');
   assert.equal(B.bot_printDesign('Принт нижче ❗️ДВА ПРИНТА'), '');
   assert.equal(B.bot_printDesign('Принти Ferar1'), 'ferar1');
+});
+
+test('Ранковий звіт: лише ТТН, не передані 3 дні і більше (поріг з налаштувань)', () => {
+  const orders = [
+    mk({ no: 1, ttn: 'A1', ttnDate: D(2026, 10, 4) }),      // 3 дні — входить
+    mk({ no: 2, ttn: 'B2', ttnDate: D(2026, 10, 5) }),      // 2 дні — ні
+    mk({ no: 3, ttn: 'C3', ttnDate: D(2026, 10, 7) }),      // сьогодні — ні
+    mk({ no: 4, ttn: 'D4', ttnDate: D(2026, 9, 20) })];     // 17 днів — входить, першою
+  const t = B.bot_buildMorningReport(orders, NOW, { warnDays: 3 })[0];
+  assert.match(t, /3\+ дні — 2 ТТН/);
+  assert.ok(t.includes('A1') && t.includes('D4') && !t.includes('B2') && !t.includes('C3'));
+  assert.ok(t.indexOf('D4') < t.indexOf('A1'));
+  const t5 = B.bot_buildMorningReport(orders, NOW, { warnDays: 5 })[0];
+  assert.match(t5, /5\+ днів — 1 ТТН/); assert.ok(t5.includes('D4') && !t5.includes('A1'));
+  assert.deepEqual(Array.from(B.bot_buildMorningReport(orders.slice(1, 3), NOW, { warnDays: 3 })), ['✅ Немає ТТН, не переданих 3+ дні']);
 });

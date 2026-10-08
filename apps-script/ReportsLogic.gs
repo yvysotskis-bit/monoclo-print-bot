@@ -57,12 +57,19 @@ function bot_buildMorningReport(orders, now, opts) {
   var groups = bot_groupByTtn_(orders.filter(function (o) {
     return o.ttn && o.stage === 'Не передана' && o.status === 'В роботі';
   }));
-  if (!groups.length) return ['✅ Усі ТТН передані до відправки'];
   groups.forEach(function (g) { g.sort = bot_unsentSortKey_(g); });
+  // у звіт — лише ТТН, не передані вже `warn` днів і більше (вік — від створення ТТН, інакше від дати замовлення;
+  // якщо дат немає зовсім — показуємо, бо перевірити неможливо)
+  var dayWord = warn + '+ ' + bot_plural(warn, 'день', 'дні', 'днів');
+  groups = groups.filter(function (g) {
+    var d = g.sort.created || (isFinite(g.sort.key) ? new Date(g.sort.key) : null);
+    return !d || bot_daysBetween(d, now) >= warn;
+  });
+  if (!groups.length) return ['✅ Немає ТТН, не переданих ' + dayWord];
   groups.sort(function (a, b) { return (a.sort.key - b.sort.key) || (a.sort.no - b.sort.no); });
 
   var p = bot_kyivParts(now);
-  var head = '📦 <b>Не передані до відправки — ' + groups.length + ' ТТН</b> · ' + BOT_WEEKDAYS_UA_FULL[p.dow] + ', ' + bot_pad2(p.d) + '.' + bot_pad2(p.m);
+  var head = '📦 <b>Не передані до відправки ' + dayWord + ' — ' + groups.length + ' ТТН</b> · ' + BOT_WEEKDAYS_UA_FULL[p.dow] + ', ' + bot_pad2(p.d) + '.' + bot_pad2(p.m);
   var parts = [head];
   groups.forEach(function (g, i) {
     var line = (i + 1) + '. ' + bot_code(g.ttn);

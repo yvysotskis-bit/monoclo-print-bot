@@ -373,7 +373,7 @@ test('Ранковий звіт: пн 09:01 — одне повідомленн�
   let g = env.sentTo(GROUP);
   assert.equal(g.length, 1);
   assert.equal(g[0].message_thread_id, REP_T);
-  assert.match(g[0].text, /Не передані до відправки — 2 ТТН/);
+  assert.match(g[0].text, /Не передані до відправки 3\+ дні — 2 ТТН/);
   assert.ok(g[0].text.indexOf('20451548987230') < g[0].text.indexOf('20451549653731'));
   env.setNow('2026-10-05T06:03:00Z'); env.poll();
   assert.equal(env.sentTo(GROUP).length, 1, 'двічі не надсилається');
@@ -407,7 +407,7 @@ test('Ранковий звіт: «thread not found» → не в загальн
 test('Звіт: «Усі ТТН передані», коли нічого немає', () => {
   const env = fresh();
   env.setNow('2026-10-06T06:01:00Z'); env.poll();
-  assert.match(env.sentTo(GROUP)[0].text, /Усі ТТН передані до відправки/);
+  assert.match(env.sentTo(GROUP)[0].text, /Немає ТТН, не переданих 3\+ дні/);
 });
 
 const npItem = (ttn, code, status, extra) => Object.assign({ Number: ttn, StatusCode: String(code), Status: status, DateCreated: '2026-10-06 12:00:00' }, extra);

@@ -126,7 +126,7 @@ var BOT_DEFAULT_SETTINGS = [
   ['REPORT_THREAD_ID', '', 'ID гілки «Реєстри» (/bind report)'],
   ['REPORT_TIME', '09:00', 'Час ранкового звіту (за Києвом)'],
   ['REPORT_DAYS', 'Пн,Вт,Ср,Чт,Пт,Сб', 'Дні тижня ранкового звіту'],
-  ['REPORT_WARN_DAYS', '3', 'Скільки днів ТТН «Не передана», щоб поставити ❗️'],
+  ['REPORT_WARN_DAYS', '3', 'У ранковий звіт потрапляють лише ТТН, не передані ця кількість днів і більше'],
   ['STORAGE_WARN_DAYS', '4', 'Скільки днів посилка чекає на відділенні, щоб потрапити у звіт власнику'],
   ['NP_SENDER_PHONE', '', 'Телефон відправника (необов\'язково): тоді НП повертає ім\'я і телефон отримувача'],
   ['MONTHLY_REPORT', 'так', 'Місячний звіт 1-го числа: так / ні'],
@@ -2841,12 +2841,19 @@ function bot_buildMorningReport(orders, now, opts) {
   var groups = bot_groupByTtn_(orders.filter(function (o) {
     return o.ttn && o.stage === 'Не передана' && o.status === 'В роботі';
   }));
-  if (!groups.length) return ['✅ Усі ТТН передані до відправки'];
   groups.forEach(function (g) { g.sort = bot_unsentSortKey_(g); });
+  // у звіт — лише ТТН, не передані вже `warn` днів і більше (вік — від створення ТТН, інакше від дати замовлення;
+  // якщо дат немає зовсім — показуємо, бо перевірити неможливо)
+  var dayWord = warn + '+ ' + bot_plural(warn, 'день', 'дні', 'днів');
+  groups = groups.filter(function (g) {
+    var d = g.sort.created || (isFinite(g.sort.key) ? new Date(g.sort.key) : null);
+    return !d || bot_daysBetween(d, now) >= warn;
+  });
+  if (!groups.length) return ['✅ Немає ТТН, не переданих ' + dayWord];
   groups.sort(function (a, b) { return (a.sort.key - b.sort.key) || (a.sort.no - b.sort.no); });
 
   var p = bot_kyivParts(now);
-  var head = '📦 <b>Не передані до відправки — ' + groups.length + ' ТТН</b> · ' + BOT_WEEKDAYS_UA_FULL[p.dow] + ', ' + bot_pad2(p.d) + '.' + bot_pad2(p.m);
+  var head = '📦 <b>Не передані до відправки ' + dayWord + ' — ' + groups.length + ' ТТН</b> · ' + BOT_WEEKDAYS_UA_FULL[p.dow] + ', ' + bot_pad2(p.d) + '.' + bot_pad2(p.m);
   var parts = [head];
   groups.forEach(function (g, i) {
     var line = (i + 1) + '. ' + bot_code(g.ttn);
