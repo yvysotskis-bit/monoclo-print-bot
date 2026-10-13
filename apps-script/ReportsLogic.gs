@@ -199,7 +199,8 @@ function bot_monthMetrics(orders, payments, y, m) {
   var nextStartN = Math.round(Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, 1) / 86400000);
   var rows = orders.filter(function (o) { return o.status === 'В роботі' && bot_inMonth_(bot_rowMonthDate_(o), y, m); });
   var byType = { 'Футболка': 0, 'Худі фліс': 0, 'Худі не утеплене': 0 };
-  rows.forEach(function (o) { if (byType[o.type] !== undefined) byType[o.type]++; });
+  var stickers = 0;
+  rows.forEach(function (o) { if (byType[o.type] !== undefined) byType[o.type]++; else if (o.type === 'Стікерпак') stickers++; });
   var cost = bot_sumBy_(rows, function (o) { return Number(o.cost) || 0; });
   var paid = bot_sumBy_(payments.filter(function (p) { return bot_inMonth_(p.date, y, m); }), function (p) { return Number(p.sum) || 0; });
   var costToEnd = bot_sumBy_(orders, function (o) {
@@ -211,7 +212,7 @@ function bot_monthMetrics(orders, payments, y, m) {
   var finals = rows.filter(function (o) { return o.stage === 'Відмова' || o.stage === 'Отримано'; });
   var speed = bot_computeSpeed(orders, new Date(monthStartN * 86400000 + 12 * 3600000), new Date(nextStartN * 86400000 + 12 * 3600000));
   return {
-    y: y, m: m, items: rows.length, byType: byType, cost: cost, paid: paid,
+    y: y, m: m, items: rows.length, byType: byType, stickers: stickers, cost: cost, paid: paid,
     debtEnd: bot_round2(costToEnd - paidToEnd),
     refusals: refusals.length, refusalsSum: bot_sumBy_(refusals, function (o) { return Number(o.cost) || 0; }),
     refusalPct: finals.length ? Math.round(refusals.length / finals.length * 1000) / 10 : 0,
@@ -230,7 +231,7 @@ function bot_fmtDelta(cur, prev) {
 function bot_buildMonthReport(cur, prev) {
   var L = ['📊 <b>Місячний звіт · ' + BOT_MONTHS_UA[cur.m - 1] + ' ' + cur.y + '</b>', ''];
   L.push('Замовлено виробів: <b>' + cur.items + '</b>' + bot_fmtDelta(cur.items, prev && prev.items));
-  L.push('   футболок ' + cur.byType['Футболка'] + ' · худі фліс ' + cur.byType['Худі фліс'] + ' · худі не утеплене ' + cur.byType['Худі не утеплене']);
+  L.push('   футболок ' + cur.byType['Футболка'] + ' · худі фліс ' + cur.byType['Худі фліс'] + ' · худі не утеплене ' + cur.byType['Худі не утеплене'] + (cur.stickers ? ' · стікерпаків ' + cur.stickers : ''));
   L.push('Собівартість: <b>' + bot_fmtMoney(cur.cost) + '</b>' + bot_fmtDelta(cur.cost, prev && prev.cost));
   L.push('Оплачено: <b>' + bot_fmtMoney(cur.paid) + '</b>' + bot_fmtDelta(cur.paid, prev && prev.paid));
   L.push('Борг на кінець місяця: <b>' + bot_fmtMoney(cur.debtEnd) + '</b>' + bot_fmtDelta(cur.debtEnd, prev && prev.debtEnd));

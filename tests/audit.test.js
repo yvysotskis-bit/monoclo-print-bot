@@ -783,3 +783,29 @@ test('A40. Хаос-тест: 14 випадкових сценаріїв × 45 �
   const seeds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
   seeds.forEach(seed => { const env = chaosScenario(seed, 45); checkInvariants(env, 'seed ' + seed); });
 });
+
+test('A41. Стікерпак: розпізнається, без розміру/кольору, ціна 0, прайс доповнюється в існуючій таблиці', () => {
+  const one = (t) => plain(B.bot_parseOrderMessage(t))[0];
+  const a = one('1500. Стікерпак Ландо Норріс\n20451550000011');
+  assert.equal(a.type, 'Стікерпак'); assert.deepEqual(a.issues, []);
+  const b = one('1501. Принт Ландо Норріс\nСтікерпак\n20451550000012');
+  assert.equal(b.type, 'Стікерпак'); assert.deepEqual(b.issues, []);
+  assert.equal(B.bot_priceFor([{ type: 'Стікерпак', price: 0, from: B.bot_makeDate(2026, 1, 1) }], 'Стікерпак', B.bot_makeDate(2026, 10, 1)), 0);
+  const c = one('1502. Принт X\nФутболка\n20451550000013');                 // звичайні речі, як і раніше, вимагають розмір і колір
+  assert.deepEqual(c.issues.map(i => i.field).sort(), ['color', 'size']);
+});
+
+test('A42. Стікерпак наскрізно: у вже працюючій таблиці «Налаштування» додає ціну 0; замовлення без розміру/кольору створюється з собівартістю 0', () => {
+  const env = fresh();
+  env.sheet('Прайс').deleteRows(5, 1);                                       // імітуємо стару таблицю без стікерпака
+  assert.ok(!env.rows('Прайс').some(r => r[0] === 'Стікерпак'));
+  env.setup(); env.setup();                                                // повторно — без дубля
+  const price = env.rows('Прайс').filter(r => r[0] === 'Стікерпак');
+  assert.equal(price.length, 1); assert.equal(price[0][1], 0);
+  assert.ok(env.rows('Довідники').some(r => r[0] === 'Стікерпак'));
+  env.update(gmsg('1600. Стікерпак Ландо Норріс\n20451550000099')); env.poll();
+  const o = O(env).filter(x => x.no === 1600);
+  assert.equal(o.length, 1);
+  assert.equal(o[0].type, 'Стікерпак'); assert.equal(o[0].cost, 0); assert.equal(o[0].size, '');
+  assert.ok(!/⚠️|не вказано/.test(env.tg.sent.map(s => s.text || '').join('\n')), 'жодних зауважень про розмір/колір');
+});

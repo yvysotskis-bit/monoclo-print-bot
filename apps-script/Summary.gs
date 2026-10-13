@@ -88,6 +88,9 @@ function bot_buildSummary() {
   sh.getRange('C19').setFormula(bot_fx('=' + monthSum(crit('stage', 'Відмова'), '$H$1', '$H$2'))).setNumberFormat(money);
   sh.getRange('D19').setFormula(bot_fx('=IFERROR(B19/(B19+' + monthCount(crit('stage', 'Отримано'), '$H$1', '$H$2') + '),0)')).setNumberFormat('0.0%');
 
+  sh.getRange('A20').setValue('У «Разом» входять також стікерпаки (0 грн), шт.');
+  sh.getRange('B20').setFormula(bot_fx('=' + monthCount(crit('type', 'Стікерпак'), '$H$1', '$H$2')));
+
   // ---- До оплати наступної звірки ----
   bot_sumHeader_(sh, 21, 'До оплати наступної звірки');
   sh.getRange('A22').setValue('Сума «Не оплачено» для етапів «Отримано» + «Відмова» (орієнтир, скільки має виставити виробництво)');

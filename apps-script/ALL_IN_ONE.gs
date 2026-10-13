@@ -115,8 +115,12 @@ var BOT_FINAL_STAGES = ['Отримано', 'Повернення'];
 var BOT_DEFAULT_PRICES = [
   ['Футболка', 420, '01.01.2026', ''],
   ['Худі фліс', 740, '01.01.2026', ''],
-  ['Худі не утеплене', 740, '01.01.2026', '']
+  ['Худі не утеплене', 740, '01.01.2026', ''],
+  ['Стікерпак', 0, '01.01.2026', 'свій товар: постачаємо виробництву самі']
 ];
+
+// Типи без розміру й кольору (їх відсутність не вважається проблемою замовлення)
+var BOT_NO_SIZE_COLOR_TYPES = ['Стікерпак'];
 
 // ---- Налаштування (аркуш «Налаштування»): [параметр, значення за замовчуванням, пояснення] ----
 var BOT_DEFAULT_SETTINGS = [
@@ -361,6 +365,7 @@ function bot_parseTypeColor(text) {
   var t = bot_trim(text).toLowerCase();
   if (/[а-яіїєґ]/.test(t)) t = bot_deLatin_(t);            // змішані латиниця + кирилиця → кирилиця
   var res = { type: '', color: bot_normColor(t), ambiguous: false, found: false };
+  if (/стік[еи]р\s*-?\s*пак/.test(t)) { res.type = 'Стікерпак'; res.found = true; res.color = ''; return res; }
   if (/футболк/.test(t)) { res.type = 'Футболка'; res.found = true; return res; }
   if (/худі|худи/.test(t)) {
     res.found = true;
@@ -441,13 +446,15 @@ function bot_parseOrderSegment_(lines) {
     if (!res.color) { var c = bot_normColor(line); if (c && line.length <= 20) { res.color = c; continue; } }
     extras.push(line);                                  // напр. «FC BARCA (PERED) W - ПЕРЕД» — опис принта
   }
+  if (!res.type && /стік[еи]р\s*-?\s*пак/i.test(bot_deLatin_(res.print.toLowerCase()))) res.type = 'Стікерпак';   // «1500. Стікерпак Ландо Норріс»
   if (/^принти?\s*$/i.test(res.print) && extras.length) res.print = res.print + ' ' + extras.join(' / ');
 
   if (!res.type) {
     res.issues.push({ field: 'type', text: res.typeAmbiguous ? 'Худі: не вказано «з флісом» чи «без флісу»' : 'не вказано вид речі (футболка / худі)' });
   }
-  if (!res.color) res.issues.push({ field: 'color', text: 'не вказано колір' });
-  if (!res.size) res.issues.push({ field: 'size', text: 'не вказано розмір' });
+  var noSz = BOT_NO_SIZE_COLOR_TYPES.indexOf(res.type) >= 0;
+  if (!res.color && !noSz) res.issues.push({ field: 'color', text: 'не вказано колір' });
+  if (!res.size && !noSz) res.issues.push({ field: 'size', text: 'не вказано розмір' });
   if (!res.ttn) {
     res.issues.push({ field: 'ttn', text: badTtn ? 'ТТН «' + badTtn + '» — не 14 цифр' : 'немає ТТН' });
   }
@@ -3189,7 +3196,8 @@ function bot_monthMetrics(orders, payments, y, m) {
   var nextStartN = Math.round(Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, 1) / 86400000);
   var rows = orders.filter(function (o) { return o.status === 'В роботі' && bot_inMonth_(bot_rowMonthDate_(o), y, m); });
   var byType = { 'Футболка': 0, 'Худі фліс': 0, 'Худі не утеплене': 0 };
-  rows.forEach(function (o) { if (byType[o.type] !== undefined) byType[o.type]++; });
+  var stickers = 0;
+  rows.forEach(function (o) { if (byType[o.type] !== undefined) byType[o.type]++; else if (o.type === 'Стікерпак') stickers++; });
   var cost = bot_sumBy_(rows, function (o) { return Number(o.cost) || 0; });
   var paid = bot_sumBy_(payments.filter(function (p) { return bot_inMonth_(p.date, y, m); }), function (p) { return Number(p.sum) || 0; });
   var costToEnd = bot_sumBy_(orders, function (o) {
@@ -3201,7 +3209,7 @@ function bot_monthMetrics(orders, payments, y, m) {
   var finals = rows.filter(function (o) { return o.stage === 'Відмова' || o.stage === 'Отримано'; });
   var speed = bot_computeSpeed(orders, new Date(monthStartN * 86400000 + 12 * 3600000), new Date(nextStartN * 86400000 + 12 * 3600000));
   return {
-    y: y, m: m, items: rows.length, byType: byType, cost: cost, paid: paid,
+    y: y, m: m, items: rows.length, byType: byType, stickers: stickers, cost: cost, paid: paid,
     debtEnd: bot_round2(costToEnd - paidToEnd),
     refusals: refusals.length, refusalsSum: bot_sumBy_(refusals, function (o) { return Number(o.cost) || 0; }),
     refusalPct: finals.length ? Math.round(refusals.length / finals.length * 1000) / 10 : 0,
@@ -3220,7 +3228,7 @@ function bot_fmtDelta(cur, prev) {
 function bot_buildMonthReport(cur, prev) {
   var L = ['📊 <b>Місячний звіт · ' + BOT_MONTHS_UA[cur.m - 1] + ' ' + cur.y + '</b>', ''];
   L.push('Замовлено виробів: <b>' + cur.items + '</b>' + bot_fmtDelta(cur.items, prev && prev.items));
-  L.push('   футболок ' + cur.byType['Футболка'] + ' · худі фліс ' + cur.byType['Худі фліс'] + ' · худі не утеплене ' + cur.byType['Худі не утеплене']);
+  L.push('   футболок ' + cur.byType['Футболка'] + ' · худі фліс ' + cur.byType['Худі фліс'] + ' · худі не утеплене ' + cur.byType['Худі не утеплене'] + (cur.stickers ? ' · стікерпаків ' + cur.stickers : ''));
   L.push('Собівартість: <b>' + bot_fmtMoney(cur.cost) + '</b>' + bot_fmtDelta(cur.cost, prev && prev.cost));
   L.push('Оплачено: <b>' + bot_fmtMoney(cur.paid) + '</b>' + bot_fmtDelta(cur.paid, prev && prev.paid));
   L.push('Борг на кінець місяця: <b>' + bot_fmtMoney(cur.debtEnd) + '</b>' + bot_fmtDelta(cur.debtEnd, prev && prev.debtEnd));
@@ -3537,6 +3545,9 @@ function bot_buildSummary() {
   sh.getRange('C19').setFormula(bot_fx('=' + monthSum(crit('stage', 'Відмова'), '$H$1', '$H$2'))).setNumberFormat(money);
   sh.getRange('D19').setFormula(bot_fx('=IFERROR(B19/(B19+' + monthCount(crit('stage', 'Отримано'), '$H$1', '$H$2') + '),0)')).setNumberFormat('0.0%');
 
+  sh.getRange('A20').setValue('У «Разом» входять також стікерпаки (0 грн), шт.');
+  sh.getRange('B20').setFormula(bot_fx('=' + monthCount(crit('type', 'Стікерпак'), '$H$1', '$H$2')));
+
   // ---- До оплати наступної звірки ----
   bot_sumHeader_(sh, 21, 'До оплати наступної звірки');
   sh.getRange('A22').setValue('Сума «Не оплачено» для етапів «Отримано» + «Відмова» (орієнтир, скільки має виставити виробництво)');
@@ -3728,6 +3739,11 @@ function bot_setupPrice_() {
     var rows = BOT_DEFAULT_PRICES.map(function (r) { return [r[0], r[1], bot_parseDate(r[2]), r[3]]; });
     sh.getRange(2, 1, rows.length, 4).setValues(rows);
   }
+  // доповнюємо прайс типами, яких ще немає (напр. «Стікерпак» у вже працюючій таблиці); існуючі рядки не чіпаємо
+  var haveTypes = {};
+  bot_readPriceRows().forEach(function (r) { haveTypes[r.type] = true; });
+  var missing = BOT_DEFAULT_PRICES.filter(function (r) { return !haveTypes[r[0]]; }).map(function (r) { return [r[0], r[1], bot_parseDate(r[2]), r[3]]; });
+  if (missing.length && sh.getLastRow() >= 2) sh.getRange(sh.getLastRow() + 1, 1, missing.length, 4).setValues(missing);
   sh.getRange(2, 2, 200, 1).setNumberFormat('#,##0" грн"');
   sh.getRange(2, 3, 200, 1).setNumberFormat('dd.mm.yyyy');
   sh.setColumnWidths(1, 4, 170);

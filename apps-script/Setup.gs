@@ -120,6 +120,11 @@ function bot_setupPrice_() {
     var rows = BOT_DEFAULT_PRICES.map(function (r) { return [r[0], r[1], bot_parseDate(r[2]), r[3]]; });
     sh.getRange(2, 1, rows.length, 4).setValues(rows);
   }
+  // доповнюємо прайс типами, яких ще немає (напр. «Стікерпак» у вже працюючій таблиці); існуючі рядки не чіпаємо
+  var haveTypes = {};
+  bot_readPriceRows().forEach(function (r) { haveTypes[r.type] = true; });
+  var missing = BOT_DEFAULT_PRICES.filter(function (r) { return !haveTypes[r[0]]; }).map(function (r) { return [r[0], r[1], bot_parseDate(r[2]), r[3]]; });
+  if (missing.length && sh.getLastRow() >= 2) sh.getRange(sh.getLastRow() + 1, 1, missing.length, 4).setValues(missing);
   sh.getRange(2, 2, 200, 1).setNumberFormat('#,##0" грн"');
   sh.getRange(2, 3, 200, 1).setNumberFormat('dd.mm.yyyy');
   sh.setColumnWidths(1, 4, 170);
