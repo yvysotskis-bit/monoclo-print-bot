@@ -17,9 +17,18 @@ function bot_hex_(bytes) {
 
 function bot_blobToValues_(blob, name) {
   if (/\.csv$/i.test(name)) {
-    var text = blob.getDataAsString('UTF-8');
-    var delim = (text.split('\n')[0].indexOf(';') >= 0 && text.split('\n')[0].indexOf(',') < 0) ? ';' : ',';
-    return Utilities.parseCsv(text, delim);
+    // Excel в Україні зберігає CSV у windows-1251: якщо як UTF-8 заголовки не впізнано — пробуємо 1251
+    var decode = function (charset) {
+      var text = blob.getDataAsString(charset).replace(/^\uFEFF/, '');
+      var first = text.split('\n')[0];
+      var delim = (first.indexOf(';') >= 0 && first.indexOf(',') < 0) ? ';' : (first.indexOf('\t') >= 0 && first.indexOf(',') < 0 ? '\t' : ',');
+      return Utilities.parseCsv(text, delim);
+    };
+    var utf = decode('UTF-8');
+    if (bot_parseProductionFile(utf).error) {
+      try { var cp = decode('windows-1251'); if (!bot_parseProductionFile(cp).error) return cp; } catch (e) { /* лишаємо UTF-8 */ }
+    }
+    return utf;
   }
   var mime = /\.xls$/i.test(name) ? 'application/vnd.ms-excel' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   var src = blob.copyBlob().setContentType(mime);
@@ -138,14 +147,20 @@ function bot_setDetailDecision_(id, ttn, decision) {
 function bot_refreshDetails_(id, details) {
   var sh = bot_sheet(BOT_SHEETS.reconDetails);
   var map = bot_headerMap(sh, BOT_DETAIL_COLS);
-  var rows = bot_detailRows_(id);
   var byTtn = {}; details.forEach(function (d) { byTtn[d.ttn] = d; });
-  rows.forEach(function (r) {
-    var d = byTtn[r.ttn]; if (!d) return;
-    sh.getRange(r._row, map.tableSum).setValue(d.tableSum);
-    sh.getRange(r._row, map.diff).setValue(d.diff);
-    sh.getRange(r._row, map.category).setValue(BOT_CAT_LABEL[d.category]);
-  });
+  var rows = bot_detailRows_(id).filter(function (r) { return byTtn[r.ttn]; });
+  // рядки однієї звірки записані підряд; якщо їх порядок змінили сортуванням — пишемо відрізками
+  var i = 0;
+  while (i < rows.length) {
+    var j = i;
+    while (j + 1 < rows.length && rows[j + 1]._row === rows[j]._row + 1) j++;
+    var vals = [];
+    for (var t = i; t <= j; t++) { var d = byTtn[rows[t].ttn]; vals.push([d.tableSum, d.diff, BOT_CAT_LABEL[d.category]]); }
+    var cols = [map.tableSum, map.diff, map.category];
+    if (cols[1] === cols[0] + 1 && cols[2] === cols[1] + 1) sh.getRange(rows[i]._row, cols[0], vals.length, 3).setValues(vals);
+    else for (var c = 0; c < 3; c++) sh.getRange(rows[i]._row, cols[c], vals.length, 1).setValues(vals.map(function (v) { return [v[c]]; }));
+    i = j + 1;
+  }
 }
 
 // =====================================================================
@@ -158,8 +173,14 @@ function bot_fileRowsFromJson_(json) {
   });
 }
 
+var BOT_CELL_LIMIT_ = 48000;      // у клітинку Google Таблиць влазить до 50 000 символів
+
+/** Дані файлу для «Звірок». Якщо не вміщаються — стискаємо (без статусів); null — файл завеликий. */
 function bot_fileRowsToJson_(rows) {
-  return JSON.stringify(rows.map(function (r) { return [r.ttn, r.price, r.refusal ? 1 : 0, r.chatNo || 0, String(r.status || '').slice(0, 24)]; }));
+  var full = JSON.stringify(rows.map(function (r) { return [r.ttn, r.price, r.refusal ? 1 : 0, r.chatNo || 0, String(r.status || '').slice(0, 24)]; }));
+  if (full.length <= BOT_CELL_LIMIT_) return full;
+  var compact = JSON.stringify(rows.map(function (r) { return [r.ttn, r.price, r.refusal ? 1 : 0]; }));
+  return compact.length <= BOT_CELL_LIMIT_ ? compact : null;
 }
 
 /** Перерахувати details для звірки з поточним станом таблиці + збережені рішення. */
@@ -208,6 +229,10 @@ function bot_reconcileFile(chatId, blob, name) {
   var parsed = bot_parseProductionFile(values);
   if (parsed.error) return bot_send(chatId, '⚠️ ' + bot_esc(parsed.error));
   if (!parsed.rows.length) return bot_send(chatId, '⚠️ У файлі «' + bot_esc(name) + '» немає жодної ТТН із сумою.');
+  var fileJson = bot_fileRowsToJson_(parsed.rows);
+  if (fileJson === null) {
+    return bot_send(chatId, '⚠️ Файл завеликий: ' + parsed.rows.length + ' ТТН. За раз бот обробляє до ≈1 500 ТТН — розділіть файл на кілька частин і надішліть окремо. Нічого не змінено.');
+  }
   var hash = bot_hex_(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, blob.getBytes()));
 
   var created = bot_withLock(function () {
@@ -217,6 +242,13 @@ function bot_reconcileFile(chatId, blob, name) {
     var orders = bot_readOrders();
     var details = bot_reconcileCompute(parsed.rows, orders, { priceRows: bot_readPriceRows(), today: now });
     var S = bot_reconSummary(details);
+
+    // Повторна обробка того самого файлу після збою (зведення не дійшло) — не створюємо другу чернетку й архів
+    var orphan = null;
+    recons.forEach(function (r) {
+      if (!orphan && r.status === 'Чернетка' && String(r.hash) === hash && !r.summaryMsg && r.date && now.getTime() - new Date(r.date).getTime() < 1800000) orphan = r;
+    });
+    if (orphan) return { id: orphan.id, details: details, warning: '', fileUrl: String(orphan.fileLink || '') };
 
     // чи не оплачували цей файл / цей набір ТТН раніше
     var confirmed = recons.filter(function (r) { return r.status === 'Підтверджено'; });
@@ -242,10 +274,12 @@ function bot_reconcileFile(chatId, blob, name) {
     var set = function (k, v) { arr[map[k] - 1] = v; };
     set('id', id); set('date', now); set('fileLink', fileUrl); set('hash', hash); set('ttnCount', S.ttnCount);
     set('fileSum', S.fileTotal); set('toPay', S.pay.sum); set('diff', S.diffTotal); set('status', 'Чернетка');
-    set('fileName', name); set('fileData', bot_fileRowsToJson_(parsed.rows));
+    set('fileName', name); set('fileData', fileJson);
     var row = sh.getLastRow() + 1;
     sh.getRange(row, map.date).setNumberFormat('dd.mm.yyyy hh:mm');
     sh.getRange(row, map.hash).setNumberFormat('@');
+    sh.getRange(row, map.summaryMsg).setNumberFormat('@');            // «чат:повідомлення» — інакше Google може прочитати як час
+    sh.getRange(row, map.fileName).setNumberFormat('@');
     sh.getRange(row, 1, 1, arr.length).setValues([arr]);
     bot_writeDetails_(id, details);
     bot_log('ІНФО', 'звірка ' + id, name + ' · ТТН ' + S.ttnCount + ' · до оплати ' + S.pay.sum);
@@ -254,7 +288,14 @@ function bot_reconcileFile(chatId, blob, name) {
 
   var meta = { id: created.id, fileName: name, warning: created.warning };
   var res = bot_send(chatId, bot_buildReconSummary(meta, created.details), { keyboard: bot_reconKeyboard(meta, created.details) });
-  if (res.ok) bot_reconPatch(created.id, { summaryMsg: chatId + ':' + res.result.message_id });
+  if (!res.ok) {                                                // без зведення й кнопок чернетка марна — не лишаємо «висіти»
+    bot_withLock(function () { bot_reconPatch(created.id, { status: 'Скасовано' }); });
+    bot_send(chatId, '⚠️ Не вдалося надіслати зведення звірки ' + bot_esc(created.id) + ' (' + bot_esc(bot_scrub(res.description)) +
+      '). Чернетку скасовано, таблиця не змінювалась, файл збережено в архіві. Надішліть файл ще раз.');
+    return;
+  }
+  bot_reconPatch(created.id, { summaryMsg: chatId + ':' + res.result.message_id });
+  if (parsed.warnings && parsed.warnings.length) bot_send(chatId, '⚠️ ' + parsed.warnings.map(bot_esc).join('\n⚠️ '));
   if (parsed.skipped.length) {
     bot_send(chatId, '⚠️ Пропущено рядків файлу: ' + parsed.skipped.length + '\n' + parsed.skipped.slice(0, 10).map(function (s) { return 'рядок ' + s.line + ': ' + bot_esc(s.reason); }).join('\n'));
   }
@@ -422,6 +463,18 @@ function bot_payConfirm_(rec0, ctx) {
     var rec = bot_reconGet(rec0.id);                                  // свіжий стан під блокуванням
     if (rec.status !== 'Чернетка') return { error: 'Вже ' + String(rec.status).toLowerCase() + (rec.confirmedAt ? ' ' + bot_fmtDateTime(new Date(rec.confirmedAt)) : '') };
     if (rec.date && Date.now() - new Date(rec.date).getTime() > 48 * 3600000) return { error: 'Чернетка старша за 48 годин — надішліть файл знову.' };
+
+    // Попередня спроба встигла позначити рядки «Оплачено», але впала до оновлення звірки → лише завершуємо
+    // (повторно рядки не чіпаємо, гроші двічі не рахуємо).
+    var already = bot_readOrders().filter(function (o) { return o.recon === rec.id && o.paid === 'Оплачено'; });
+    if (already.length) {
+      var doneSum = bot_sumBy_(already, function (o) { return Number(o.cost) || 0; });
+      var when = new Date();
+      bot_reconPatch(rec.id, { status: 'Підтверджено', confirmedSum: doneSum, rowsCount: already.length, confirmedAt: when, confirmedBy: ctx.userName });
+      bot_log('УВАГА', 'оплата ' + rec.id + ' завершена після збою', already.length + ' рядків · ' + doneSum);
+      return { ok: true, recovered: true, rec: rec, plan: { rows: already, sum: doneSum }, now: when };
+    }
+
     var details = bot_reconDetailsNow_(rec);
     var changed = bot_recheckPayable(details, bot_readOrders());
     var plan = bot_planPayment(details);
@@ -430,7 +483,8 @@ function bot_payConfirm_(rec0, ctx) {
     }
     if (!plan.rows.length) return { error: 'Нічого оплачувати' };
     var today = bot_today();
-    var patches = plan.rows.map(function (r) { return { row: r, fields: { paid: 'Оплачено', paidDate: today, recon: rec.id } }; });
+    // «Оплачено» пишемо ОСТАННІМ: якщо запуск перервуть посередині, рядки лишаться «Не оплачено» з ID звірки, і повтор безпечно допише решту
+    var patches = plan.rows.map(function (r) { return { row: r, fields: { recon: rec.id, paidDate: today, paid: 'Оплачено' } }; });
     bot_patchOrders(patches);
     var now = new Date();
     bot_reconPatch(rec.id, { status: 'Підтверджено', confirmedSum: plan.sum, rowsCount: plan.rows.length, confirmedAt: now, confirmedBy: ctx.userName });
@@ -447,9 +501,13 @@ function bot_payConfirm_(rec0, ctx) {
     return;
   }
   bot_answerCb(ctx.cb.id, 'Підтверджено');
-  var stamp = '✅ <b>Підтверджено ' + bot_fmtDateTime(out.now) + ' · ' + out.plan.rows.length + ' ' + bot_plural(out.plan.rows.length, 'рядок', 'рядки', 'рядків') + ' · ' + bot_fmtMoney(out.plan.sum) + '</b>';
+  var stamp = '✅ <b>Підтверджено ' + bot_fmtDateTime(out.now) + ' · ' + out.plan.rows.length + ' ' + bot_plural(out.plan.rows.length, 'рядок', 'рядки', 'рядків') + ' · ' + bot_fmtMoney(out.plan.sum) + '</b>' +
+    (out.recovered ? '\n(операцію завершено після короткого збою — рядки повторно не змінювались)' : '');
   var ref = bot_refMsg_(out.rec);
-  if (ref) bot_edit(ref.chatId, ref.msgId, bot_buildReconSummary(bot_reconMeta_(out.rec), out.details) + '\n\n' + stamp);
+  if (ref) {
+    if (out.recovered) bot_tgRaw('editMessageReplyMarkup', { chat_id: ref.chatId, message_id: ref.msgId, reply_markup: { inline_keyboard: [] } });
+    else bot_edit(ref.chatId, ref.msgId, bot_buildReconSummary(bot_reconMeta_(out.rec), out.details) + '\n\n' + stamp);
+  }
   bot_edit(ctx.chatId, ctx.msgId, stamp);
   bot_send(ctx.chatId, 'Додати оплату <b>' + bot_fmtMoney(out.plan.sum) + '</b> у аркуш «Оплати»?',
     { keyboard: { inline_keyboard: [[
@@ -501,18 +559,20 @@ function bot_paymentRecord_(rec, sum, ctx) {
     (typeof res.balance === 'number' ? '\n💰 Новий борг: <b>' + bot_fmtMoney(res.balance) + '</b>' : ''));
 }
 
+/** Власник написав суму після «✏️ Інша сума». Нічого не записуємо, доки він не натисне «Так». */
 function bot_paymentCustomSum(msg, awaiting) {
   var sum = bot_toNumber(msg.text);
-  if (sum === null || sum <= 0) {
+  if (sum === null || sum <= 0 || sum > 10000000) {
     bot_awaitPut(msg.from.id, awaiting);
     return bot_send(msg.chat.id, 'Не зрозумів суму. Напишіть число, наприклад <code>25000</code>.');
   }
+  sum = bot_round2(sum);
   var rec = bot_reconGet(awaiting.id);
   if (!rec) return bot_send(msg.chat.id, 'Звірку не знайдено.');
-  var res = bot_addPaymentRow_(rec.id, sum);
-  if (res.duplicate) return bot_send(msg.chat.id, 'ℹ️ Оплату для звірки ' + bot_esc(rec.id) + ' уже додано (рядок ' + res.row + ').');
-  bot_send(msg.chat.id, '✅ Оплату <b>' + bot_fmtMoney(sum) + '</b> додано в «Оплати» (№' + res.no + ').' +
-    (typeof res.balance === 'number' ? '\n💰 Новий борг: <b>' + bot_fmtMoney(res.balance) + '</b>' : ''));
+  bot_send(msg.chat.id, 'Додати оплату <b>' + bot_fmtMoney(sum) + '</b> у аркуш «Оплати» (звірка ' + bot_esc(rec.id) + ')?',
+    { keyboard: { inline_keyboard: [[
+      { text: '✅ Так, ' + bot_fmtMoney(sum), callback_data: 'opy|' + rec.id + '|' + sum },
+      { text: 'Скасувати', callback_data: 'opn|' + rec.id }]] } });
 }
 
 // =====================================================================
@@ -528,8 +588,13 @@ function bot_cmdHistory(chatId) {
   }).join('\n'));
 }
 
+/** «Z-2026-10-07-1» (латинська Z), ««З-…»» → «З-2026-10-07-1». */
+function bot_normReconId_(s) {
+  return String(s || '').replace(/[«»"'`]/g, '').trim().replace(/^[ZzЗз3]\s*-/, 'З-');
+}
+
 function bot_cmdUndo(chatId, arg) {
-  var id = String(arg || '').trim();
+  var id = bot_normReconId_(arg);
   if (!id) return bot_send(chatId, 'Напишіть: <code>/undo З-2026-10-07-1</code> (ID дивіться в /history).');
   var rec = bot_reconGet(id);
   if (!rec) return bot_send(chatId, 'Звірки «' + bot_esc(id) + '» немає. Перевірте /history.');

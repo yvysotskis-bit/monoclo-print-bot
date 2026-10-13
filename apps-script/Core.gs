@@ -149,7 +149,8 @@ function bot_normTtn(v) {
   if (v === null || v === undefined || v === '') return '';
   if (typeof v === 'number') {
     if (!isFinite(v)) return '';
-    return Math.round(v).toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 0 });
+    var r = Math.round(v);
+    return (r >= 0 && r < 1e21) ? String(r) : '';                  // звичайне перетворення числа: не залежимо від локалізованого форматування в Apps Script
   }
   var s = String(v).replace(/[\s '’`]/g, '');
   if (/^\d+\.0+$/.test(s)) s = s.replace(/\.0+$/, '');
@@ -232,8 +233,10 @@ var BOT_PREFIX_RE_ = /^[\s❗‼⚠️!]*(терміново[\s:!—\-]*)?/i;
 /** Рядок початку замовлення: «1538. Принт …», «1542 Принт …», «❗️ТЕРМІНОВО 1520. Принт …». → {no, rest} | null */
 function bot_orderStart_(line) {
   var s = bot_trim(line).replace(BOT_PREFIX_RE_, '');
-  var m = s.match(/^(\d{1,6})(?:[.)]\s*|\s+(?=принт))(.+)$/i);
-  return m ? { no: parseInt(m[1], 10), rest: m[2].trim() } : null;
+  // «1538. Принт …» / «1538) …» — будь-який номер; без крапки — лише 3+ цифри і слово «Принт» далі
+  // (щоб «2 принти на завтра» з розмови не вважалось замовленням №2)
+  var m = s.match(/^(?:(\d{1,6})[.)]\s*|(\d{3,6})\s+(?=принт))(.+)$/i);
+  return m ? { no: parseInt(m[1] || m[2], 10), rest: m[3].trim() } : null;
 }
 
 /** Непорожні рядки; рядки-«префікси» на кшталт «❗️ТЕРМІНОВО» прибираємо. */
@@ -369,16 +372,21 @@ function bot_parsePriceCommand(arg, knownTypes, today) {
 
 var BOT_FILE_ALIASES_ = {
   ttn: ['ттн', 'накладна', 'штрих'],
-  sum: ['ціна', 'цена', 'сума', 'сумма'],
+  sum: ['дроп', 'ціна', 'цена', 'сума', 'сумма'],
   status: ['статус'],
   note: ['примітка', 'примечан', 'коментар'],
   chatNo: ['№ з чату', '№ чату', 'номер замовлення']
 };
 
+/** Заголовок підходить, якщо містить псевдонім (і в «як є», і з латинськими двійниками, напр. «TTH» → «ттн»). */
+function bot_headerHas_(h, alias) {
+  return h.indexOf(alias) >= 0 || bot_deLatin_(h).indexOf(alias) >= 0;
+}
+
 function bot_findHeader_(headers, aliases) {
   for (var a = 0; a < aliases.length; a++) {
     for (var i = 0; i < headers.length; i++) {
-      if (headers[i].indexOf(aliases[a]) >= 0) return i;
+      if (bot_headerHas_(headers[i], aliases[a])) return i;
     }
   }
   return -1;
@@ -405,6 +413,16 @@ function bot_parseProductionFile(values) {
     var what = bot_findHeader_(h0, BOT_FILE_ALIASES_.ttn) < 0 ? 'ТТН' : 'суму (ціну)';
     return { error: 'Не знайшов колонку ' + what + '. Заголовки файлу: ' + (first || '(порожньо)') };
   }
+  var warnings = [];
+  var sumCandidates = [];
+  headersRaw.forEach(function (h, idx) {
+    var low = bot_trim(h).toLowerCase();
+    if (BOT_FILE_ALIASES_.sum.some(function (al) { return bot_headerHas_(low, al); })) sumCandidates.push(idx);
+  });
+  if (sumCandidates.length > 1) {
+    warnings.push('У файлі кілька колонок із сумою/ціною (' + sumCandidates.map(function (i) { return '«' + headersRaw[i] + '»'; }).join(', ') +
+      '). Використано «' + headersRaw[cols.sum] + '» — перевірте, що це ціна виробництва.');
+  }
   var rows = [], skipped = [];
   for (var i = headerIdx + 1; i < values.length; i++) {
     var row = values[i] || [];
@@ -423,7 +441,7 @@ function bot_parseProductionFile(values) {
       line: i + 1
     });
   }
-  return { rows: rows, skipped: skipped, headers: headersRaw };
+  return { rows: rows, skipped: skipped, headers: headersRaw, warnings: warnings };
 }
 
 // =====================================================================

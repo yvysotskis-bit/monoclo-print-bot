@@ -80,7 +80,7 @@ function bot_buildMorningReport(orders, now, opts) {
     var items = g.rows.slice().sort(function (a, b) { return Number(a.no) - Number(b.no); }).map(bot_orderItemLine_);
     parts.push(line + '\n   ' + items.join('\n   '));
   });
-  return bot_splitMessages(parts, 4000);
+  return bot_splitMessages(parts, 3800);
 }
 
 // ---------- 6а.5. Посилки, що застрягли на відділенні ----------
@@ -114,7 +114,7 @@ function bot_buildStorageReport(orders, infoMap, now, opts) {
     if (x.info.name || x.info.phone) txt += '\n   ' + bot_esc([x.info.name, x.info.phone].filter(Boolean).join(' · '));
     parts.push(txt);
   });
-  return bot_splitMessages(parts, 4000);
+  return bot_splitMessages(parts, 3800);
 }
 
 // ---------- 7.7. Швидкість виробництва ----------

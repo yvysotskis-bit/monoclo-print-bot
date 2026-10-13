@@ -75,7 +75,7 @@ test('План імпорту після №1482: 74 замовлення №148
   const row = n => plan.rows.find(r => r.no === n).obj;
   // багатозамовленнєві повідомлення: 1493–1495 більше не губляться, ТТН спільна
   ['1492', '1493', '1494', '1495'].forEach(n => assert.equal(row(+n).ttn, '20451550339713'));
-  assert.ok(row(1493).msgId.endsWith('.1') && row(1495).msgId.endsWith('.3'));
+  assert.ok(row(1493).msgId.endsWith('#1') && row(1495).msgId.endsWith('#3'));
   assert.equal(row(1496).ttn, '20451551928053');                         // з «ТЕРМІНОВО»
   assert.equal(row(1542).type, 'Футболка');                              // без крапки
   assert.equal(row(1497).type, 'Худі фліс'); assert.equal(row(1497).cost, 740);
@@ -109,7 +109,7 @@ test('Живе повідомлення з кількома замовлення
   const cap = '1492. Принт nos inside\nХуді чорне без флісу\nXL\n\nПринт позаду\n\n1493. Принт no risk\nХуді чорне фліс\nXL\n\nПринт позаду\n\n20451550339713';
   env.update(gmsg(7001, cap)); env.poll();
   let rows = env.ctx.bot_readOrders();
-  assert.deepEqual(plain(rows.map(r => [r.no, r.msgId, r.ttn, r.cost])), [[1492, '7001', '20451550339713', 740], [1493, '7001.1', '20451550339713', 740]]);
+  assert.deepEqual(plain(rows.map(r => [r.no, r.msgId, r.ttn, r.cost])), [[1492, '7001', '20451550339713', 740], [1493, '7001#1', '20451550339713', 740]]);
   assert.equal(env.tg.reactions.length, 1); assert.equal(env.tg.reactions[0].reaction[0].emoji, '👌');
   env.update(gmsg(7001, cap)); env.poll();                                   // те саме повідомлення ще раз
   assert.equal(env.ctx.bot_readOrders().length, 2);

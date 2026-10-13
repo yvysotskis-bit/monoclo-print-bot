@@ -147,8 +147,14 @@ function bot_menuTgImport() {
     'Вставте посилання на файл messages.html (він має лежати на вашому Google Диску). Якщо файлів кілька (messages.html, messages2.html…) — вставте всі посилання через пробіл.', ui.ButtonSet.OK_CANCEL);
   if (r.getSelectedButton() !== ui.Button.OK) return;
   try {
+    var urls = r.getResponseText();
+    var last = bot_readOrders().reduce(function (a, o) { return Math.max(a, Number(o.no) || 0); }, 0);
+    var r2 = ui.prompt('З якого номера?', 'Імпортувати замовлення з номером БІЛЬШИМ за… Залиште порожнім — після останнього в таблиці (зараз №' + last + ').', ui.ButtonSet.OK_CANCEL);
+    if (r2.getSelectedButton() !== ui.Button.OK) return;
+    var startAfter = r2.getResponseText().trim();
+    if (startAfter && isNaN(Number(startAfter))) { bot_alert_('Не число', 'Потрібен номер замовлення, наприклад 1482.'); return; }
     bot_ss().toast('Читаю файл…', '🤖 Бот', 60);
-    var plan = bot_tgImportPlan(r.getResponseText());
+    var plan = bot_tgImportPlan(urls, startAfter);
     if (!plan.rows.length) { bot_alert_('Нових замовлень немає', bot_tgImportReportText(plan, false, false)); return; }
     var go = ui.alert('Додати замовлення?', 'Останній номер у таблиці: ' + plan.afterNo + '.\n\n' + bot_tgImportReportText(plan, false, false) + '\n\nДодати їх у таблицю?', ui.ButtonSet.YES_NO);
     if (go !== ui.Button.YES) return;
@@ -182,6 +188,10 @@ function bot_healthChecks() {
   var np = !!bot_prop(BOT_PROP.NP_KEY);
   add(np, np ? 'Ключ Нової пошти введено' : 'Ключ Нової пошти не введено (статуси ТТН не оновлюватимуться)');
   if (np) { try { bot_npPing(); add(true, 'Нова пошта відповідає'); } catch (e) { add(false, 'Нова пошта: ' + e.message); } }
+  try {
+    var tz = bot_ss().getSpreadsheetTimeZone();
+    add(/^Europe\/(Kyiv|Kiev)$/.test(tz), /^Europe\/(Kyiv|Kiev)$/.test(tz) ? 'Часовий пояс таблиці: Київ' : 'Часовий пояс таблиці: ' + tz + ' (має бути Київ: Файл → Налаштування → Часовий пояс)');
+  } catch (e) { add(false, 'Не вдалося перевірити часовий пояс: ' + e.message); }
   var missing = Object.keys(BOT_SHEETS).filter(function (k) { return !bot_ss().getSheetByName(BOT_SHEETS[k]); });
   add(!missing.length, missing.length ? 'Немає аркушів: ' + missing.map(function (k) { return BOT_SHEETS[k]; }).join(', ') + ' — «Перше налаштування»' : 'Усі аркуші на місці');
   var st = bot_selfTest();

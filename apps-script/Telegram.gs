@@ -36,19 +36,47 @@ function bot_tg(method, payload) {
   return r.result;
 }
 
-/** Надіслати повідомлення. opts: {thread, keyboard, silent} */
+/** Довжина тексту так, як її рахує Telegram: без HTML-тегів, сутності — по 1 символу (ліміт 4096). */
+function bot_visibleLen_(t) {
+  return String(t).replace(/<[^>]+>/g, '').replace(/&(lt|gt|amp|quot);/g, 'x').length;
+}
+
+var BOT_TG_LIMIT_ = 3900;
+
+/** Ділить довгий текст по рядках на частини, що вміщаються в повідомлення. */
+function bot_chunkText_(text, limit) {
+  limit = limit || BOT_TG_LIMIT_;
+  var out = [], cur = '';
+  String(text).split('\n').forEach(function (line) {
+    while (bot_visibleLen_(line) > limit) {                 // один надто довгий рядок — ріжемо жорстко
+      if (cur) { out.push(cur); cur = ''; }
+      out.push(line.slice(0, limit)); line = line.slice(limit);
+    }
+    if (cur && bot_visibleLen_(cur) + 1 + bot_visibleLen_(line) > limit) { out.push(cur); cur = line; }
+    else cur = cur ? cur + '\n' + line : line;
+  });
+  if (cur) out.push(cur);
+  return out.length ? out : [''];
+}
+
+/** Надіслати повідомлення (довгі діляться на кілька). opts: {thread, keyboard, silent} */
 function bot_send(chatId, text, opts) {
   opts = opts || {};
-  var p = { chat_id: chatId, text: text, parse_mode: 'HTML', disable_web_page_preview: true };
-  if (opts.thread) p.message_thread_id = Number(opts.thread);
-  if (opts.keyboard) p.reply_markup = opts.keyboard;
-  if (opts.silent) p.disable_notification = true;
-  var r = bot_tgRaw('sendMessage', p);
-  if (!r.ok) { bot_log('ПОМИЛКА', 'sendMessage', r.description + ' · chat ' + chatId); }
+  var chunks = bot_visibleLen_(text) > BOT_TG_LIMIT_ ? bot_chunkText_(text) : [String(text)];
+  var r = null;
+  for (var i = 0; i < chunks.length; i++) {
+    var p = { chat_id: chatId, text: chunks[i], parse_mode: 'HTML', disable_web_page_preview: true };
+    if (opts.thread) p.message_thread_id = Number(opts.thread);
+    if (opts.keyboard && i === chunks.length - 1) p.reply_markup = opts.keyboard;
+    if (opts.silent) p.disable_notification = true;
+    r = bot_tgRaw('sendMessage', p);
+    if (!r.ok) { bot_log('ПОМИЛКА', 'sendMessage', r.description + ' · chat ' + chatId); return r; }
+  }
   return r;
 }
 
 function bot_edit(chatId, messageId, text, keyboard) {
+  if (bot_visibleLen_(text) > BOT_TG_LIMIT_) text = bot_chunkText_(text)[0] + '\n…';
   var p = { chat_id: chatId, message_id: messageId, text: text, parse_mode: 'HTML', disable_web_page_preview: true };
   p.reply_markup = keyboard || { inline_keyboard: [] };
   var r = bot_tgRaw('editMessageText', p);
@@ -57,7 +85,7 @@ function bot_edit(chatId, messageId, text, keyboard) {
 }
 
 function bot_answerCb(id, text, alert) {
-  bot_tgRaw('answerCallbackQuery', { callback_query_id: id, text: text || '', show_alert: !!alert });
+  bot_tgRaw('answerCallbackQuery', { callback_query_id: id, text: String(text || '').slice(0, 190), show_alert: !!alert });
 }
 
 function bot_react(chatId, messageId, emoji) {
@@ -72,7 +100,9 @@ function bot_sendToOwners(text, opts) {
 
 /** Звичайні повідомлення, довші за ліміт, надсилаємо кількома. */
 function bot_sendMany(chatId, parts, opts) {
-  parts.forEach(function (p) { bot_send(chatId, p, opts); });
+  var ok = true;
+  parts.forEach(function (p) { var r = bot_send(chatId, p, opts); if (r && !r.ok) ok = false; });
+  return ok;
 }
 
 /** Скачати файл з Telegram як Blob. */
@@ -144,7 +174,7 @@ function bot_awaitTake(userId) {
     if (!x) return null;
     delete m[String(userId)];
     bot_setProp('AWAIT_INPUT', JSON.stringify(m));
-    return (Date.now() - x.t < 3600000) ? x.p : null;
+    return (Date.now() - x.t < 900000) ? x.p : null;      // очікуємо число не довше 15 хв
   } catch (e) { return null; }
 }
 
@@ -156,33 +186,61 @@ function bot_threadOf(msg) {
   return (msg.is_topic_message && msg.message_thread_id) ? String(msg.message_thread_id) : '0';
 }
 
+var BOT_MAX_ATTEMPTS_ = 3;
+
+/** Атомарно «займає» опитування (два запуски тригера одночасно не можуть обробляти ті самі оновлення). */
+function bot_pollEnter_(now) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(3000)) return false;
+  try {
+    var ts = Number(bot_prop(BOT_PROP.POLL_LOCK_TS) || 0);
+    if (ts && now - ts < 290000) return false;               // попередній запуск ще працює
+    bot_setProp(BOT_PROP.POLL_LOCK_TS, now);
+    return true;
+  } finally { lock.releaseLock(); }
+}
+
+function bot_retryState_() {
+  try { return JSON.parse(bot_prop('UPDATE_RETRY') || '{}'); } catch (e) { return {}; }
+}
+
+/** Забирає оновлення з Telegram. Оновлення «підтверджується» (offset) лише після успішної обробки
+ *  або після 3 невдалих спроб — тимчасовий збій не губить замовлення. */
+function bot_pollUpdates_(started) {
+  var offset = Number(bot_prop(BOT_PROP.OFFSET) || 0);
+  var payload = { timeout: 0, limit: 100, allowed_updates: BOT_ALLOWED_UPDATES };
+  if (offset) payload.offset = offset;
+  var res = bot_tgRaw('getUpdates', payload);
+  if (!res.ok) { bot_log('ПОМИЛКА', 'getUpdates', res.description); return; }
+  bot_setProp(BOT_PROP.LAST_POLL_TS, Date.now());
+  var list = res.result.slice().sort(function (a, b) { return a.update_id - b.update_id; });
+  for (var i = 0; i < list.length; i++) {
+    var u = list[i];
+    if (Date.now() - started > 200000) return;                // решта — у наступному запуску
+    try {
+      bot_handleUpdate(u);
+    } catch (e) {
+      var st = bot_retryState_();
+      var n = (st.id === u.update_id ? st.n : 0) + 1;
+      bot_log('ПОМИЛКА', 'update ' + u.update_id + ' (спроба ' + n + ')', e.message + ' | ' + (e.stack || '').split('\n')[1]);
+      if (n < BOT_MAX_ATTEMPTS_) {
+        bot_setProp('UPDATE_RETRY', JSON.stringify({ id: u.update_id, n: n }));
+        return;                                               // оновлення лишається в черзі Telegram, порядок зберігається
+      }
+      try { bot_sendToOwners('⚠️ Не вдалося обробити оновлення Telegram після ' + n + ' спроб (пропущено): ' + bot_esc(bot_scrub(e.message))); } catch (e2) { /* ігноруємо */ }
+    }
+    bot_delProp('UPDATE_RETRY');
+    bot_setProp(BOT_PROP.OFFSET, u.update_id + 1);
+  }
+}
+
 /** Тригер «щохвилини». */
 function bot_poll() {
   if (bot_prop(BOT_PROP.ENABLED) === '0') return;
   var started = Date.now();
-  var lockTs = Number(bot_prop(BOT_PROP.POLL_LOCK_TS) || 0);
-  if (lockTs && started - lockTs < 290000) return;           // попередній запуск ще працює
-  bot_setProp(BOT_PROP.POLL_LOCK_TS, started);
+  if (!bot_pollEnter_(started)) return;
   try {
-    var offset = Number(bot_prop(BOT_PROP.OFFSET) || 0);
-    var payload = { timeout: 0, limit: 100, allowed_updates: BOT_ALLOWED_UPDATES };
-    if (offset) payload.offset = offset;
-    var res = bot_tgRaw('getUpdates', payload);
-    if (!res.ok) {
-      bot_log('ПОМИЛКА', 'getUpdates', res.description);
-    } else {
-      res.result.forEach(function (u) {
-        if (Date.now() - started > 200000) return;            // решта — у наступному запуску
-        try {
-          bot_handleUpdate(u);
-        } catch (e) {
-          bot_log('ПОМИЛКА', 'update ' + u.update_id, e.message + ' | ' + (e.stack || '').split('\n')[1]);
-          try { bot_sendToOwners('⚠️ Помилка обробки оновлення: ' + bot_esc(e.message)); } catch (e2) { /* ігноруємо */ }
-        }
-        bot_setProp(BOT_PROP.OFFSET, u.update_id + 1);
-      });
-    }
-    bot_setProp(BOT_PROP.LAST_POLL_TS, Date.now());
+    try { bot_pollUpdates_(started); } catch (e) { bot_log('ПОМИЛКА', 'опитування Telegram', e.message); }
     try { bot_flushDeletes(); } catch (e) { bot_log('ПОМИЛКА', 'flushDeletes', e.message); }
     if (Date.now() - started < 150000) {
       try { bot_tickScheduled(started); } catch (e) { bot_log('ПОМИЛКА', 'tickScheduled', e.message); }
@@ -352,6 +410,6 @@ function bot_onCallback(cb) {
     }
   } catch (e) {
     bot_log('ПОМИЛКА', 'callback ' + data, e.message);
-    bot_answerCb(cb.id, 'Помилка: ' + e.message, true);
+    bot_answerCb(cb.id, 'Помилка: ' + bot_scrub(e.message), true);
   }
 }

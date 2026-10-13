@@ -51,8 +51,18 @@ function bot_buildOrderFields_(p, orderDate, priceRows, status) {
   };
 }
 
-/** Ключ рядка в колонці msg_id: перше замовлення повідомлення — його message_id, наступні — «id.1», «id.2». */
-function bot_msgKey(mid, idx) { return idx === 0 ? String(mid) : mid + '.' + idx; }
+/**
+ * Ключ рядка в колонці msg_id: перше замовлення повідомлення — його message_id, наступні — «id#1», «id#2».
+ * (Не «id.1»: Google перетворює такий текст на число, і «id.10» збігалось би з «id.1».)
+ */
+function bot_msgKey(mid, idx) { return idx === 0 ? String(mid) : mid + '#' + idx; }
+
+/** Рядок за ключем; розуміє і старий формат «id.N» (N < 10), яким користувались до виправлення. */
+function bot_findByMsgKey_(orders, mid, idx) {
+  var key = bot_msgKey(mid, idx), legacy = (idx > 0 && idx < 10) ? mid + '.' + idx : null, found = null;
+  orders.forEach(function (o) { if (o.msgId === key || (legacy && o.msgId === legacy)) found = o; });
+  return found;
+}
 
 /** Обробка повідомлення з гілки «Замовлення на клієнта» (може містити кілька замовлень). */
 function bot_handleOrderMessage(msg, caption, edited) {
@@ -69,8 +79,7 @@ function bot_handleOrderMessage(msg, caption, edited) {
 
     list.forEach(function (p, idx) {
       var key = bot_msgKey(mid, idx);
-      var existing = null;
-      orders.forEach(function (o) { if (o.msgId === key) existing = o; });
+      var existing = bot_findByMsgKey_(orders, mid, idx);
       var orderDate = existing && existing.date ? existing.date : bot_orderDateOf_(msg);
 
       // ---- повторна обробка того самого повідомлення ----
@@ -89,7 +98,8 @@ function bot_handleOrderMessage(msg, caption, edited) {
         }
         var built = bot_buildOrderFields_(p, orderDate, priceRows, existing.status);
         var f = built.fields;
-        if (existing.status !== 'В роботі') delete f.cost;
+        // вручну виправлену чи «за файлом» змінену собівартість не скидаємо: перераховуємо лише коли змінився тип речі
+        if (existing.status !== 'В роботі' || (existing.type === p.type && existing.cost > 0)) delete f.cost;
         f.note = bot_mergeNote_(existing.note, built.issues);
         if (existing.ttn !== p.ttn) {                               // ТТН змінилась — старі дані НП недійсні
           f.stage = p.ttn ? '' : 'Немає ТТН'; f.npStatus = ''; f.ttnDate = ''; f.handoff = ''; f.arrived = '';
@@ -106,6 +116,10 @@ function bot_handleOrderMessage(msg, caption, edited) {
 
       // ---- нове замовлення ----
       var dup = orders.filter(function (o) { return o.no === p.no; });
+      if (dup.length && p.ttn && dup[0].ttn === p.ttn) {            // точна повторна публікація (напр. «ТЕРМІНОВО») — не турбуємо власника
+        bot_log('ІНФО', 'повтор замовлення №' + p.no, 'та сама ТТН — проігноровано');
+        return;
+      }
       if (dup.length) {
         bot_sendToOwners('⚠️ Дубль: замовлення №' + p.no + ' уже є в таблиці (рядок ' + dup[0]._row + '). Новий рядок не додаю.' + linkTxt);
         return;

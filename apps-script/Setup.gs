@@ -3,7 +3,7 @@
  * Можна запускати повторно: наявні дані не чіпає, лише дописує відсутнє.
  */
 
-var BOT_ORDERS_ROWS = 3000;
+var BOT_ORDERS_ROWS = 10000;     // запас на рік роботи: формати, списки й кольори діють на всі ці рядки
 
 function bot_setupAll() {
   var ss = bot_ss();
@@ -38,6 +38,7 @@ function bot_setupAll() {
   recon.getRange(2, rmap.confirmedAt, recon.getMaxRows() - 1, 1).setNumberFormat('dd.mm.yyyy hh:mm');
   recon.getRange(2, rmap.hash, recon.getMaxRows() - 1, 1).setNumberFormat('@');
   recon.hideColumns(rmap.fileData);
+  ['id', 'fileName', 'summaryMsg', 'fileData'].forEach(function (k) { recon.getRange(2, rmap[k], recon.getMaxRows() - 1, 1).setNumberFormat('@'); });
   var det = bot_sheet(BOT_SHEETS.reconDetails), dmap = bot_headerMap(det, BOT_DETAIL_COLS);
   det.getRange(2, dmap.ttn, det.getMaxRows() - 1, 1).setNumberFormat('@');
   bot_sheet(BOT_SHEETS.monthly).getRange(2, 1, 500, 1).setNumberFormat('@');
@@ -153,6 +154,7 @@ function bot_setupOrders_() {
   col('handoff').setNumberFormat('dd.mm.yyyy hh:mm');
   if (map.arrived) col('arrived').setNumberFormat('dd.mm.yyyy hh:mm');
   col('ttn').setNumberFormat('@');                               // ТТН — завжди текст
+  col('msgId').setNumberFormat('@');                             // ключі «id#1» — текст, не число
   col('cost').setNumberFormat('#,##0" грн"');
   col('no').setNumberFormat('0');
 

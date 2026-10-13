@@ -23,7 +23,20 @@ class Range {
   constructor(sh, r, c, nr, nc) { Object.assign(this, { sh, r, c, nr, nc }); const px = new Proxy(this, { get: (t, p) => (p in t ? t[p] : (p === 'then' ? undefined : () => px)) }); return px; }
   getValues() { this.sh._ensure(this.r + this.nr - 1, this.c + this.nc - 1); const out = []; for (let i = 0; i < this.nr; i++) { const row = []; for (let j = 0; j < this.nc; j++) { const v = this.sh.data[this.r - 1 + i][this.c - 1 + j]; row.push(v === undefined ? '' : v); } out.push(row); } return out; }
   getValue() { return this.getValues()[0][0]; }
-  setValues(a) { this.sh._ensure(this.r + a.length - 1, this.c + a[0].length - 1); a.forEach((row, i) => row.forEach((v, j) => { this.sh.data[this.r - 1 + i][this.c - 1 + j] = v; })); return this; }
+  setValues(a) {                                    // як у Google (+ ліміт 50 000 символів у клітинці)
+    this.sh.ss.writeCalls = (this.sh.ss.writeCalls || 0) + 1;
+    a.forEach(row => row.forEach(v => { if (typeof v === 'string' && v.length > 50000) throw new Error('Your input contains more than the maximum of 50000 characters in a single cell.'); }));
+    this.sh._ensure(this.r + a.length - 1, this.c + a[0].length - 1);
+    a.forEach((row, i) => row.forEach((v, j) => {
+      const key = (this.r + i) + ',' + (this.c + j);
+      if (typeof v === 'string' && this.sh.fmt[key] !== '@') {
+        if (/^-?\d+(\.\d+)?$/.test(v) && !/^0\d/.test(v)) v = Number(v);
+        else if (/^\d+:[0-5]?\d$/.test(v)) v = 0.5;                                                          // «390203400:12» → тривалість часу
+        else if (/^\d{1,2}[./]\d{1,2}$/.test(v)) v = new Date(Date.UTC(2026, Number(v.split(/[./]/)[1]) - 1, Number(v.split(/[./]/)[0])));   // «10.10» / «1/2» → дата
+      }
+      this.sh.data[this.r - 1 + i][this.c - 1 + j] = v;
+    })); return this;
+  }
   setValue(v) { return this.setValues([[v]]); }
   setFormula(f) {                                   // моделюємо мову таблиці: «;»-мови не розуміють «,» між аргументами
     const semi = this.sh.ss.semi, bare = String(f).replace(/"[^"]*"/g, '');
@@ -49,6 +62,7 @@ class Sheet {
   getLastColumn() { let last = 0; this.data.forEach(row => row.forEach((v, j) => { if (v !== '' && v !== undefined && v !== null) last = Math.max(last, j + 1); })); return last; }
   getRange(a, b, c, d) { if (typeof a === 'string') { [a, b, c, d] = a1(a); } const r = new Range(this, a, b, c || 1, d || 1); this.maxRows = Math.max(this.maxRows, a + (c || 1) - 1); return r; }
   getDataRange() { return this.getRange(1, 1, Math.max(this.getLastRow(), 1), Math.max(this.getLastColumn(), 1)); }
+  getRangeList(list) { const rs = list.map(a => this.getRange(a)); const calls = (this.ss.rangeListCalls = (this.ss.rangeListCalls || 0) + 1); const one = (f) => { const before = this.ss.writeCalls || 0; f(); this.ss.writeCalls = before + 1; }; return { setValue: (v) => one(() => rs.forEach(r => r.setValue(v))), setNumberFormat: (f) => { rs.forEach(r => r.setNumberFormat(f)); }, setBackground: (c) => { rs.forEach(r => r.setBackground(c)); } }; }
   insertRowsAfter(pos, n) { this.maxRows += n; } insertRowsBefore(pos, n) { this.maxRows += n; }
   deleteRows(from, n) { this.data.splice(from - 1, n); }
   appendRow(arr) { const r = this.getLastRow() + 1; this._ensure(r, arr.length); arr.forEach((v, j) => { this.data[r - 1][j] = v; }); }
@@ -62,7 +76,7 @@ function makeSpreadsheet() {
   ss.insertSheet = (n) => { const s = new Sheet(ss, n); ss.sheets.push(s); return s; };
   ss.getSheets = () => ss.sheets.slice();
   ss.deleteSheet = s => { ss.sheets = ss.sheets.filter(x => x !== s); };
-  ss.getId = () => 'ss-id';
+  ss.getId = () => 'ss-id'; ss.getSpreadsheetTimeZone = () => 'Europe/Kyiv';
   ss.toast = () => {};
   ss.setActiveSheet = () => {};
   ss.setSpreadsheetTimeZone = () => {}; ss.setSpreadsheetLocale = () => {};
@@ -79,19 +93,21 @@ function newEnv(opts) {
   const files = { created: [] };
 
   const state = { nextFile: null };
-  const mkBlob = (f) => { const b = { name: f.name, bytes: f.bytes, getBytes: () => Array.from(f.bytes).map(x => (x > 127 ? x - 256 : x)), copyBlob() { return b; }, setName(n) { b.name = n; return b; }, setContentType() { return b; }, getDataAsString: () => Buffer.from(f.bytes).toString('utf8') }; return b; };
+  const mkBlob = (f) => { const b = { name: f.name, bytes: f.bytes, getBytes: () => Array.from(f.bytes).map(x => (x > 127 ? x - 256 : x)), copyBlob() { return b; }, setName(n) { b.name = n; return b; }, setContentType() { return b; }, getDataAsString: (enc) => (f.encoding && String(enc || 'UTF-8').toLowerCase() !== f.encoding ? Buffer.from(f.bytes).toString('latin1') : (f.encoding ? new TextDecoder('windows-1251').decode(Buffer.from(f.bytes)) : Buffer.from(f.bytes).toString('utf8'))) }; return b; };
+  const visibleLen = (t) => String(t || '').replace(/<[^>]+>/g, '').replace(/&(lt|gt|amp|quot);/g, 'x').length;
   const respond = (obj) => ({ getResponseCode: () => 200, getContentText: () => JSON.stringify(obj) });
   const UrlFetchApp = {
     fetch(url, o) {
       const payload = o && o.payload ? JSON.parse(o.payload) : {};
       if (/telegram\.org\/file\//.test(url)) return { getResponseCode: () => 200, getBlob: () => mkBlob(state.nextFile) };
+      if (state.netFail && state.netFail(url, o)) throw new Error(state.netFailMessage || ('Exception: Address unavailable: ' + url));
       let m = String(url).match(/api\.telegram\.org\/bot[^/]+\/(\w+)/);
       if (m) {
         const method = m[1]; tg.calls.push({ method, payload });
         if (tg.fail[method]) return respond({ ok: false, error_code: 400, description: tg.fail[method] });
         switch (method) {
-          case 'sendMessage': { const id = tg.nextId++; tg.sent.push(Object.assign({ message_id: id }, payload)); return respond({ ok: true, result: { message_id: id } }); }
-          case 'editMessageText': tg.edits.push(payload); return respond({ ok: true, result: true });
+          case 'sendMessage': { if (visibleLen(payload.text) > 4096 || !payload.text) return respond({ ok: false, error_code: 400, description: 'Bad Request: message is too long' }); const id = tg.nextId++; tg.sent.push(Object.assign({ message_id: id }, payload)); return respond({ ok: true, result: { message_id: id } }); }
+          case 'editMessageText': if (visibleLen(payload.text) > 4096) return respond({ ok: false, error_code: 400, description: 'Bad Request: message is too long' }); tg.edits.push(payload); return respond({ ok: true, result: true });
           case 'setMessageReaction': tg.reactions.push(payload); return respond({ ok: true, result: true });
           case 'answerCallbackQuery': tg.answers.push(payload); return respond({ ok: true, result: true });
           case 'deleteMessage': tg.deletes.push(payload); return respond({ ok: true, result: true });
@@ -102,7 +118,7 @@ function newEnv(opts) {
           default: return respond({ ok: true, result: true });
         }
       }
-      if (/novaposhta/.test(url)) { np.calls.push(payload); return respond({ success: true, data: np.handler(payload), errors: [] }); }
+      if (/novaposhta/.test(url)) { np.calls.push(payload); if (np.fail) return respond({ success: false, data: [], errors: [np.fail] }); return respond({ success: true, data: np.handler(payload), errors: [] }); }
       throw new Error('Невідомий URL у моці: ' + url);
     }
   };

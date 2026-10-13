@@ -74,11 +74,22 @@ function bot_isOwner(userId) { return bot_ownerIds().indexOf(String(userId)) >= 
 
 // ---------- лог ----------
 
+/** Прибирає з тексту токен Telegram і ключ НП (помилки UrlFetch містять URL із токеном). */
+function bot_scrub(s) {
+  var t = String(s === undefined || s === null ? '' : s);
+  [BOT_PROP.TG_TOKEN, BOT_PROP.NP_KEY].forEach(function (k) {
+    var secret = '';
+    try { secret = bot_prop(k); } catch (e) { secret = ''; }
+    if (secret && secret.length >= 8) t = t.split(secret).join('***');
+  });
+  return t.replace(/bot\d{5,}:[A-Za-z0-9_-]{20,}/g, 'bot***').replace(/\d{8,}:[A-Za-z0-9_-]{30,}/g, '***');
+}
+
 function bot_log(level, event, details) {
   try {
     var sh = bot_ss().getSheetByName(BOT_SHEETS.log);
     if (!sh) return;
-    sh.appendRow([new Date(), level, event, String(details === undefined ? '' : details).slice(0, 2000)]);
+    sh.appendRow([new Date(), level, bot_scrub(event), bot_scrub(details === undefined ? '' : details).slice(0, 2000)]);
     if (sh.getLastRow() > 2200) sh.deleteRows(2, 200);
   } catch (e) { /* лог не повинен ламати роботу */ }
 }
@@ -156,13 +167,18 @@ function bot_readOrders() {
   return out;
 }
 
-/** Остання заповнена в колонці A (№ замовлення) + 1. */
+/** Перший вільний рядок: після останнього, де заповнено «№», «Принт» або «ТТН» (рядок без № не затирається). */
 function bot_nextOrderRow_(sh, map) {
   var maxRows = sh.getMaxRows();
   if (maxRows < 2) return 2;
-  var col = sh.getRange(1, map.no, maxRows, 1).getValues();
   var last = 1;
-  for (var i = col.length - 1; i >= 1; i--) { if (col[i][0] !== '' && col[i][0] !== null) { last = i + 1; break; } }
+  [map.no, map.print, map.ttn].forEach(function (c) {
+    if (!c) return;
+    var col = sh.getRange(1, c, maxRows, 1).getValues();
+    for (var i = col.length - 1; i >= last; i--) {
+      if (col[i][0] !== '' && col[i][0] !== null) { last = Math.max(last, i + 1); break; }
+    }
+  });
   return last + 1;
 }
 
@@ -225,28 +241,57 @@ function bot_markYellow_(sh, map, rowNum, keys) {
 }
 
 /**
- * Пакетна зміна полів у рядках: patches = [{row, fields:{key:value}}].
- * Для кожної колонки — одне читання і один setValues.
+ * Пакетна зміна полів: patches = [{row, fields:{key:value}}].
+ * Пишемо ЛИШЕ змінені клітинки (ніколи не перезаписуємо цілу колонку — Google заново «розпізнав» би текст
+ * інших клітинок: «10.10» → дата, «=…» → формула — і затер би ручні правки):
+ *  • однакові значення (напр. «Оплачено» для 92 рядків) — одним викликом через RangeList;
+ *  • різні — суцільними відрізками рядків.
  */
 function bot_patchOrders(patches) {
   if (!patches.length) return;
   bot_withLock(function () {
     var sh = bot_ordersSheet();
     var map = bot_ordersMap(sh);
+    var last = sh.getLastRow();
     var byKey = {};
     patches.forEach(function (p) {
+      if (p.row < 2 || p.row > last) return;
       Object.keys(p.fields).forEach(function (k) {
         if (!map[k]) return;
-        (byKey[k] = byKey[k] || []).push({ row: p.row, value: p.fields[k] });
+        var v = p.fields[k];
+        (byKey[k] = byKey[k] || {})[p.row] = (v === null || v === undefined) ? '' : v;      // для одного рядка перемагає останнє значення
       });
     });
-    var last = sh.getLastRow();
     Object.keys(byKey).forEach(function (k) {
-      var range = sh.getRange(2, map[k], last - 1, 1);
-      var col = range.getValues();
-      byKey[k].forEach(function (u) { if (u.row >= 2 && u.row <= last) col[u.row - 2][0] = (u.value === null || u.value === undefined) ? '' : u.value; });
-      if (k === 'ttn') range.setNumberFormat('@');
-      range.setValues(col);
+      var letter = bot_colLetter(map[k]);
+      var rows = Object.keys(byKey[k]).map(Number).sort(function (a, b) { return a - b; });
+      var groups = {};
+      rows.forEach(function (r) {
+        var v = byKey[k][r];
+        var gk = bot_isDate(v) ? 'd' + v.getTime() : typeof v + ':' + v;
+        (groups[gk] = groups[gk] || { value: v, rows: [] }).rows.push(r);
+      });
+      var distinct = Object.keys(groups);
+      if (distinct.length <= 4 && distinct.length < rows.length) {                        // кілька різних значень на багато рядків
+        distinct.forEach(function (gk) {
+          var g = groups[gk];
+          var list = sh.getRangeList(g.rows.map(function (r) { return letter + r; }));
+          if (k === 'ttn') list.setNumberFormat('@');
+          list.setValue(g.value);
+        });
+        return;
+      }
+      var i = 0;                                                                         // різні значення — суцільні відрізки
+      while (i < rows.length) {
+        var j = i;
+        while (j + 1 < rows.length && rows[j + 1] === rows[j] + 1) j++;
+        var vals = [];
+        for (var t = i; t <= j; t++) vals.push([byKey[k][rows[t]]]);
+        var range = sh.getRange(rows[i], map[k], vals.length, 1);
+        if (k === 'ttn') range.setNumberFormat('@');
+        range.setValues(vals);
+        i = j + 1;
+      }
     });
   });
 }

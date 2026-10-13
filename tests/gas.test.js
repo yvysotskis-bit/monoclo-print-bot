@@ -121,7 +121,7 @@ test('Редагування оновлює той самий рядок (дод
 test('Дубль номера → не додається, власник отримує повідомлення', () => {
   const env = fresh();
   env.update(groupMsg(CAP)); env.poll();
-  env.update(groupMsg(CAP)); env.poll();
+  env.update(groupMsg(CAP.replace('20451553931463', '20451553931999'))); env.poll();      // той самий № з іншою ТТН
   assert.equal(O(env).length, 1);
   assert.match(env.lastSent().text, /Дубль/);
 });
@@ -546,6 +546,9 @@ test('Інша сума оплати: після «✏️ Інша сума» б
   env.update(privMsg('abc')); env.poll();
   assert.match(env.lastSent().text, /Не зрозумів суму/);
   env.update(privMsg('30 000')); env.poll();
+  const ask = env.lastSent();
+  assert.match(ask.text, /Додати оплату <b>30 000 грн/);                         // тепер — із підтвердженням кнопкою
+  env.update(cb('opy|' + id + '|30000', ask.message_id)); env.poll();
   const pays = env.ctx.bot_readPayments();
   assert.equal(pays[pays.length - 1].sum, 30000); assert.equal(pays[pays.length - 1].recon, id);
 });
@@ -575,7 +578,7 @@ test('Помилка в одному оновленні не блокує реш
   const env = fresh();
   env.update(privMsg('/find')); env.update(groupMsg(CAP));
   const real = env.ctx.bot_cmdFind; env.ctx.bot_cmdFind = () => { throw new Error('boom'); };
-  env.poll();
+  env.poll(); env.poll(); env.poll();                       // 3 спроби, потім збійне оновлення пропускається, черга рухається далі
   assert.equal(O(env).length, 1);
   assert.ok(env.sentTo(OWNER).some(s => /boom/.test(s.text)));
   assert.equal(env.props.UPDATE_OFFSET, '3');

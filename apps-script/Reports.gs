@@ -4,18 +4,27 @@
  */
 
 function bot_parseTimeSetting_(s, defMin) {
-  var m = String(s || '').match(/^(\d{1,2}):(\d{2})/);
+  var m = String(s || '').match(/^(\d{1,2})[:.](\d{2})/);
   return m ? (+m[1]) * 60 + (+m[2]) : defMin;
 }
 
+/** Дні тижня звіту: «Пн,Вт,Ср», діапазон «Пн-Сб», у будь-якому регістрі. Нерозпізнане → Пн–Сб. */
 function bot_reportDays_() {
-  var raw = String(bot_setting('REPORT_DAYS', 'Пн,Вт,Ср,Чт,Пт,Сб')).split(/[,\s;]+/).filter(Boolean);
-  var idx = [];
-  raw.forEach(function (d) {
-    var i = BOT_DAYS_UA.indexOf(d.charAt(0).toUpperCase() + d.slice(1, 2).toLowerCase());
-    if (i >= 0) idx.push(i);
+  var order = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'];
+  var dowOf = { 'Пн': 1, 'Вт': 2, 'Ср': 3, 'Чт': 4, 'Пт': 5, 'Сб': 6, 'Нд': 0 };
+  var norm = function (t) { t = String(t).replace(/\./g, ''); return t.charAt(0).toUpperCase() + t.slice(1, 2).toLowerCase(); };
+  var days = {};
+  String(bot_setting('REPORT_DAYS', 'Пн,Вт,Ср,Чт,Пт,Сб')).split(/[,\s;]+/).filter(Boolean).forEach(function (tok) {
+    var parts = tok.split(/[-–—]/);
+    if (parts.length === 2) {
+      var a = order.indexOf(norm(parts[0])), b = order.indexOf(norm(parts[1]));
+      if (a >= 0 && b >= 0) { for (var k = a; ; k = (k + 1) % 7) { days[dowOf[order[k]]] = true; if (k === b) break; } return; }
+    }
+    var i = order.indexOf(norm(tok));
+    if (i >= 0) days[dowOf[order[i]]] = true;
   });
-  return idx;
+  var list = Object.keys(days).map(Number);
+  return list.length ? list : [1, 2, 3, 4, 5, 6];
 }
 
 /** Викликається щохвилини з bot_poll. */
@@ -34,8 +43,9 @@ function bot_tickScheduled(startedMs) {
     try { bot_npUpdate({ rows: rows }); } catch (e) { bot_log('ПОМИЛКА', 'НП (нові ТТН)', e.message); }
   }
 
-  // 2) регулярне оновлення статусів НП — кожні 30 хв
+  // 2) регулярне оновлення статусів НП — кожні 30 хв (час спроби фіксуємо ДО запиту: помилка НП не повторюється щохвилини)
   if (hasNp && Date.now() - Number(bot_prop(BOT_PROP.LAST_NP_TS) || 0) >= 29 * 60000) {
+    bot_setProp(BOT_PROP.LAST_NP_TS, Date.now());
     var r = bot_npUpdate({});
     if (r.error) bot_log('ПОМИЛКА', 'оновлення НП', r.error);
     else bot_log('ІНФО', 'оновлення НП', 'перевірено ' + r.checked + ', змінено ' + r.updated);
@@ -58,12 +68,15 @@ function bot_tickScheduled(startedMs) {
     }
   }
 
-  // 5) місячний звіт 1-го числа
+  // 5) місячний звіт 1-го числа (мітку «надіслано» ставимо лише після успіху — інакше збій = звіт втрачено)
   if (p.d === 1 && minutes >= 540 && String(bot_setting('MONTHLY_REPORT', 'так')).toLowerCase() !== 'ні' &&
       bot_prop(BOT_PROP.LAST_MONTH_REPORT) !== bot_monthKey(now)) {
     var prev = bot_prevYm(p.y, p.m);
-    bot_setProp(BOT_PROP.LAST_MONTH_REPORT, bot_monthKey(now));
-    bot_ownerIds().forEach(function (id) { bot_sendMonthly_(id, prev.y, prev.m, true); });
+    var allOk = true;
+    bot_ownerIds().forEach(function (id) {
+      try { bot_sendMonthly_(id, prev.y, prev.m, true); } catch (e) { allOk = false; bot_log('ПОМИЛКА', 'місячний звіт', e.message); }
+    });
+    if (allOk) bot_setProp(BOT_PROP.LAST_MONTH_REPORT, bot_monthKey(now));
   }
 }
 
@@ -74,8 +87,12 @@ function bot_morningParts_() {
   return bot_buildMorningReport(bot_readOrders(), new Date(), { warnDays: isNaN(warn) ? 3 : warn });
 }
 
-/** @return true — звіт доставлено (або не може бути доставлений і власника попереджено). */
+/**
+ * @return true — звіт доставлено повністю (або не може бути доставлений і власника попереджено);
+ *         false — спробуємо ще раз за хвилину, продовживши з тієї частини, на якій зупинились (без дублів).
+ */
 function bot_sendMorningReport() {
+  var today = bot_dayKey(new Date());
   var chat = bot_setting('GROUP_CHAT_ID'), thread = bot_setting('REPORT_THREAD_ID');
   if (!chat || thread === '') {
     bot_sendToOwners('⚠️ Ранковий звіт не надіслано: не задано гілку «Реєстри». Напишіть <code>/bind report</code> у цій гілці групи.');
@@ -83,16 +100,27 @@ function bot_sendMorningReport() {
   }
   var parts = bot_morningParts_();
   var opts = thread !== '0' ? { thread: thread } : {};
-  for (var i = 0; i < parts.length; i++) {
-    var r = bot_send(chat, parts[i], opts);
-    if (!r.ok) {
-      if (/thread not found/i.test(r.description || '')) {
-        bot_sendToOwners('⚠️ Ранковий звіт не надіслано: гілку «Реєстри» не знайдено (message thread not found). Перенастройте: у гілці групи напишіть <code>/bind report</code>. Звіт нижче.');
-        bot_sendMany(bot_ownerIds()[0], parts);
-        return true;
-      }
-      throw new Error('Не вдалося надіслати ранковий звіт: ' + r.description);
+  var prog = {};
+  try { prog = JSON.parse(bot_prop('REPORT_PROGRESS') || '{}'); } catch (e) { prog = {}; }
+  if (prog.day !== today) prog = { day: today, sent: 0, fails: 0 };
+  for (var i = prog.sent; i < parts.length; i++) {
+    var r;
+    try { r = bot_send(chat, parts[i], opts); } catch (e) { r = { ok: false, description: bot_scrub(e.message) }; }
+    if (r.ok) { prog.sent = i + 1; bot_setProp('REPORT_PROGRESS', JSON.stringify(prog)); continue; }
+    if (/thread not found/i.test(r.description || '')) {
+      bot_sendToOwners('⚠️ Ранковий звіт не надіслано: гілку «Реєстри» не знайдено (message thread not found). Перенастройте: у гілці групи напишіть <code>/bind report</code>. Звіт нижче.');
+      bot_sendMany(bot_ownerIds()[0], parts.slice(prog.sent));
+      return true;
     }
+    prog.fails = (prog.fails || 0) + 1;
+    bot_setProp('REPORT_PROGRESS', JSON.stringify(prog));
+    bot_log('ПОМИЛКА', 'ранковий звіт', 'спроба ' + prog.fails + ': ' + r.description);
+    if (prog.fails >= 3) {
+      bot_sendToOwners('⚠️ Ранковий звіт не надіслано: ' + bot_esc(bot_scrub(r.description)) + '. Перевірте, що бот ще в групі й може писати в гілку «Реєстри» (за потреби — <code>/bind report</code>). Звіт нижче.');
+      bot_sendMany(bot_ownerIds()[0], parts.slice(prog.sent));
+      return true;                                           // сьогодні більше не повторюємо
+    }
+    return false;
   }
   bot_log('ІНФО', 'ранковий звіт', 'частин: ' + parts.length);
   return true;

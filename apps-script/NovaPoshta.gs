@@ -85,6 +85,8 @@ function bot_npPlanPatch(order, item, now) {
     // перша передача НП: етап вперше змінився з «Не передана» на будь-який інший (7.7)
     if (order.stage === 'Не передана' && item.stage !== 'Не передана' && item.stage !== 'Немає ТТН' && !order.handoff) f.handoff = now;
     if (item.stage === 'На відділенні' && !order.arrived) f.arrived = item.actualDelivery || item.firstStorageDay || now;
+    // посилка пішла з відділення (переадресація / повернення) — наступне прибуття рахуємо заново
+    if (order.stage === 'На відділенні' && item.stage !== 'На відділенні' && order.arrived) f.arrived = '';
   }
   return { fields: f, unknownCode: unknown };
 }
@@ -108,6 +110,7 @@ function bot_npCall_(modelName, calledMethod, props) {
 function bot_npFetch(ttns, phone) {
   var out = {};
   for (var i = 0; i < ttns.length; i += 100) {
+    if (i > 0 && typeof Utilities !== 'undefined' && Utilities.sleep) Utilities.sleep(300);   // не частити до API НП
     var docs = ttns.slice(i, i + 100).map(function (t) {
       var d = { DocumentNumber: t };
       if (phone) d.Phone = phone;

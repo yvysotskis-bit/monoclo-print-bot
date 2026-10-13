@@ -50,14 +50,17 @@ function bot_reconcileCompute(fileRows, orders, opts) {
     d.rowsCount = rows.length;
     d.tableSum = bot_sumBy_(rows, function (r) { return Number(r.cost) || 0; });
     d.orders = rows.map(function (r) { return { no: r.no, print: r.print, type: r.type, cost: Number(r.cost) || 0, row: r._row }; });
-    var paid = rows.filter(function (r) { return r.paid === 'Оплачено'; });
+    // «значущі» рядки: скасований/нульовий рядок (cost 0, статус не «В роботі») не робить ТТН «частково оплаченою»
+    var relevant = rows.filter(function (r) { return r.status === 'В роботі' || (Number(r.cost) || 0) > 0; });
+    if (!relevant.length) relevant = rows;
+    var paid = relevant.filter(function (r) { return r.paid === 'Оплачено'; });
     var firstPaid = paid[0];
     var spornaRows = rows.filter(function (r) { return r.paid === 'Спірна'; });
     if (spornaRows.length) {
       var m = String(spornaRows[0].note || '').match(/Спірна,\s*(З-[\d-]+)/);
       d.deferred = m ? m[1] : 'раніше';
     }
-    if (paid.length === rows.length) {
+    if (paid.length === relevant.length) {
       d.category = 'PAID'; d.diff = d.fileSum;
       d.paidRecon = firstPaid.recon || ''; d.paidDate = firstPaid.paidDate || '';
     } else if (paid.length > 0) {
@@ -321,7 +324,7 @@ function bot_diffKeyboard(meta, details, fileUrl) {
 function bot_buildSupplierText(meta, details) {
   var S = bot_reconSummary(details);
   var c = S.cats;
-  var L = ['У файлі ' + meta.fileName + ' не сходяться:'];
+  var L = ['У файлі ' + bot_esc(meta.fileName) + ' не сходяться:'];
   c.MISMATCH.forEach(function (d) {
     L.push('• ' + bot_code(d.ttn) + ' — у вас ' + bot_fmtNum(d.fileSum) + ', у нас ' + bot_fmtNum(d.tableSum) +
       ' (' + d.orders.map(function (o) { return '№' + o.no; }).join(', ') + ')');

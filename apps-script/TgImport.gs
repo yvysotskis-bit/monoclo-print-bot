@@ -138,7 +138,8 @@ function bot_driveIdFromUrl(url) {
 }
 
 /** urls — рядок з одним або кількома посиланнями (messages.html, messages2.html …). */
-function bot_tgImportPlan(urls) {
+/** startAfter — імпортувати замовлення з № більшим за це (за замовчуванням — останній № у таблиці). */
+function bot_tgImportPlan(urls, startAfter) {
   var ids = String(urls).split(/[\s,;]+/).filter(Boolean).map(bot_driveIdFromUrl);
   if (!ids.length || ids.some(function (x) { return !x; })) throw new Error('Не схоже на посилання на файл Google Диска. Завантажте messages.html на Диск → ПКМ → «Надати доступ / Копіювати посилання».');
   var messages = [];
@@ -150,8 +151,9 @@ function bot_tgImportPlan(urls) {
   var orders = bot_readOrders();
   var nos = orders.map(function (o) { return o.no; }).filter(function (n) { return n !== ''; });
   var maxNo = nos.reduce(function (a, n) { return Math.max(a, Number(n) || 0); }, 0);
-  var plan = bot_planTelegramImport(messages, { afterNo: maxNo, existingNos: nos, priceRows: bot_readPriceRows() });
-  plan.afterNo = maxNo;
+  var after = (startAfter === undefined || startAfter === null || startAfter === '' || isNaN(Number(startAfter))) ? maxNo : Number(startAfter);
+  var plan = bot_planTelegramImport(messages, { afterNo: after, existingNos: nos, priceRows: bot_readPriceRows() });
+  plan.afterNo = after; plan.maxNoInTable = maxNo;
   return plan;
 }
 
