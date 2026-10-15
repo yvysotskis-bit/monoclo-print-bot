@@ -562,3 +562,21 @@ test('/bind payments у гілці замовлень відхиляється; 
   env.update(privMsg('/unbind payments')); env.poll();
   assert.equal(c.bot_setting('PAY_CHAT_ID'), '');
 });
+
+test('/registry у гілці «Реєстри» від дозволеної людини з виробництва; чужим і в інших гілках — ігнор', () => {
+  const env = liveEnv(); const c = env.ctx;
+  env.update(groupMsg(MSG1)); env.poll();
+  c.bot_setSetting('REGISTRY_USERS', '555');
+  const inThread = (text, from, thread) => ({ message: { message_id: ++mid, date: ts('2026-10-07T05:00:00Z'), chat: { id: GROUP, type: 'supergroup' }, from: { id: from, first_name: 'Друкар' }, is_topic_message: true, message_thread_id: thread, text } });
+  env.update(inThread('/registry', 777, REP_T)); env.poll();                              // чужий
+  env.update(inThread('/registry', 555, ORD_T)); env.poll();                              // не та гілка
+  assert.equal((env.scans || []).length, 0);
+  env.update(inThread('/id', 555, REP_T)); env.poll();
+  assert.ok(env.sentTo(GROUP).some(s => /Ваш Telegram ID: <code>555<\/code>/.test(s.text)));
+  env.update(inThread('/registry', 555, REP_T)); env.poll();                              // дозволений
+  assert.equal(env.scans.length, 1);
+  assert.equal(groupDocs(env).length, 1);
+  assert.ok(env.sentTo(OWNER).some(s => /Реєстр створено на запит/.test(s.text)));
+  env.update(inThread('/registry', 555, REP_T)); env.poll();                              // одразу вдруге — пауза
+  assert.equal(env.scans.length, 1);
+});

@@ -295,6 +295,8 @@ function bot_onMessage(msg, edited) {
       return bot_cmdBind(msg, cmd.arg);
     }
     var payChat = bot_setting('PAY_CHAT_ID');
+    if (cmd && cmd.cmd === 'id') return bot_send(chat.id, 'Ваш Telegram ID: <code>' + from.id + '</code>', bot_threadOf(msg) !== '0' ? { thread: bot_threadOf(msg) } : {});
+    if (cmd && cmd.cmd === 'registry') return bot_registryFromGroup(msg, from);
     var groupId = bot_setting('GROUP_CHAT_ID');
     var isOrdersChat = groupId && String(chat.id) === String(groupId) && bot_threadOf(msg) === String(bot_setting('ORDERS_THREAD_ID'));
     if (payChat && String(chat.id) === String(payChat) && !isOrdersChat) return bot_handlePayMessage(msg, edited);   // чат «Отправка отчет» (ніколи не перехоплює гілку замовлень)

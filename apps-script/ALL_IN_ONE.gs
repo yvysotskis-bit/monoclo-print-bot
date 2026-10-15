@@ -183,6 +183,7 @@ var BOT_DEFAULT_SETTINGS = [
   ['DESC_MODE', 'повний', 'Формат опису: «повний» — повний опис кожного замовлення, а якщо не вміщається — лише номери замовлень; «драбина» — з проміжними скороченнями (чор, Всі позаду, без пробілів у назвах, без (W)/(B))'],
   ['PAY_CHAT_ID', '', 'ID чату «Отправка отчет» (ставиться командою /bind payments у тому чаті): повідомлення власника «+10 000» стають оплатами'],
   ['PAY_THREAD_ID', '', 'ID гілки чату оплат (якщо чат з гілками)'],
+  ['REGISTRY_USERS', '5411130511, 5814974771, 1143277277, 632064984, 1225142225', 'Telegram ID людей з виробництва (через кому), яким дозволено викликати /registry у гілці «Реєстри» (створити реєстр у будь-який час). ID людина дізнається командою /id'],
   ['DESC_LIMIT', '100', 'Максимум символів в описі ТТН (Додаткова інформація в Новій пошті)'],
   ['DESC_FROM_ORDER', '15088', 'Описи й реєстр — лише для ТТН, де є замовлення з номером БІЛЬШЕ за це (старіші бот не чіпає)'],
   ['NP_MODE', 'перевірка', 'Режим запису в Нову пошту: «перевірка» (нічого не пишемо, лише надсилаємо власнику) або «бойовий»'],
@@ -1482,6 +1483,8 @@ function bot_onMessage(msg, edited) {
       return bot_cmdBind(msg, cmd.arg);
     }
     var payChat = bot_setting('PAY_CHAT_ID');
+    if (cmd && cmd.cmd === 'id') return bot_send(chat.id, 'Ваш Telegram ID: <code>' + from.id + '</code>', bot_threadOf(msg) !== '0' ? { thread: bot_threadOf(msg) } : {});
+    if (cmd && cmd.cmd === 'registry') return bot_registryFromGroup(msg, from);
     var groupId = bot_setting('GROUP_CHAT_ID');
     var isOrdersChat = groupId && String(chat.id) === String(groupId) && bot_threadOf(msg) === String(bot_setting('ORDERS_THREAD_ID'));
     if (payChat && String(chat.id) === String(payChat) && !isOrdersChat) return bot_handlePayMessage(msg, edited);   // чат «Отправка отчет» (ніколи не перехоплює гілку замовлень)
@@ -4328,6 +4331,31 @@ function bot_registryRun(opts) {
   bot_regSend_(reg, ttns, nos, now);
   bot_log('ІНФО', 'реєстр', '№' + reg.no + ' · ' + reg.count + ' ТТН · ' + bot_regRange(nos));
   return { done: true, text: opts.manual ? '✅ Реєстр №' + bot_esc(reg.no) + ' (' + reg.count + ' ТТН) надіслано в гілку «Реєстри».' : '' };
+}
+
+function bot_registryUserIds_() { return String(bot_setting('REGISTRY_USERS', '')).split(/[,\s;]+/).filter(Boolean); }
+
+/**
+ * /registry у гілці «Реєстри» від власника або дозволеної людини з виробництва → реєстр прямо зараз (як екстрений).
+ * Відповіді в гілці — мінімальні; подробиці, попередження й помилки — лише власнику. Не частіше ніж раз на 2 хв.
+ */
+function bot_registryFromGroup(msg, from) {
+  var chatId = msg.chat.id, thread = bot_threadOf(msg);
+  if (String(chatId) !== String(bot_setting('GROUP_CHAT_ID')) || thread !== String(bot_setting('REPORT_THREAD_ID'))) return;     // лише гілка «Реєстри»
+  if (!(bot_isOwner(from.id) || bot_registryUserIds_().indexOf(String(from.id)) >= 0)) return;
+  var opts = thread !== '0' ? { thread: thread } : {};
+  var last = Number(bot_prop('LAST_GROUP_REGISTRY_TS') || 0);
+  if (Date.now() - last < 120000) return bot_send(chatId, 'Зачекайте хвилину: реєстр щойно створювався.', opts);
+  bot_setProp('LAST_GROUP_REGISTRY_TS', Date.now());
+  var r;
+  try { r = bot_registryRun({ manual: true, force: true }); }
+  catch (e) {
+    bot_log('ПОМИЛКА', 'реєстр із групи', e.message);
+    bot_sendToOwners('❌ Реєстр, запрошений з групи (' + bot_esc([from.first_name, from.username].filter(Boolean).join(' ')) + '), не створено: ' + bot_esc(bot_scrub(e.message)));
+    return bot_send(chatId, 'Не вдалося створити реєстр — власника повідомлено.', opts);
+  }
+  if (!/створено|надіслано|перевідправив/i.test(r.text || '')) bot_send(chatId, 'Немає нових ТТН для реєстру.', opts);
+  else bot_sendToOwners('🗂 Реєстр створено на запит ' + bot_esc([from.first_name, from.username].filter(Boolean).join(' ')) + ' (з гілки «Реєстри»).');
 }
 
 /** /registry preview — що ввійде, нічого не створюючи. */

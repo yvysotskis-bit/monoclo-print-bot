@@ -194,6 +194,31 @@ function bot_registryRun(opts) {
   return { done: true, text: opts.manual ? '✅ Реєстр №' + bot_esc(reg.no) + ' (' + reg.count + ' ТТН) надіслано в гілку «Реєстри».' : '' };
 }
 
+function bot_registryUserIds_() { return String(bot_setting('REGISTRY_USERS', '')).split(/[,\s;]+/).filter(Boolean); }
+
+/**
+ * /registry у гілці «Реєстри» від власника або дозволеної людини з виробництва → реєстр прямо зараз (як екстрений).
+ * Відповіді в гілці — мінімальні; подробиці, попередження й помилки — лише власнику. Не частіше ніж раз на 2 хв.
+ */
+function bot_registryFromGroup(msg, from) {
+  var chatId = msg.chat.id, thread = bot_threadOf(msg);
+  if (String(chatId) !== String(bot_setting('GROUP_CHAT_ID')) || thread !== String(bot_setting('REPORT_THREAD_ID'))) return;     // лише гілка «Реєстри»
+  if (!(bot_isOwner(from.id) || bot_registryUserIds_().indexOf(String(from.id)) >= 0)) return;
+  var opts = thread !== '0' ? { thread: thread } : {};
+  var last = Number(bot_prop('LAST_GROUP_REGISTRY_TS') || 0);
+  if (Date.now() - last < 120000) return bot_send(chatId, 'Зачекайте хвилину: реєстр щойно створювався.', opts);
+  bot_setProp('LAST_GROUP_REGISTRY_TS', Date.now());
+  var r;
+  try { r = bot_registryRun({ manual: true, force: true }); }
+  catch (e) {
+    bot_log('ПОМИЛКА', 'реєстр із групи', e.message);
+    bot_sendToOwners('❌ Реєстр, запрошений з групи (' + bot_esc([from.first_name, from.username].filter(Boolean).join(' ')) + '), не створено: ' + bot_esc(bot_scrub(e.message)));
+    return bot_send(chatId, 'Не вдалося створити реєстр — власника повідомлено.', opts);
+  }
+  if (!/створено|надіслано|перевідправив/i.test(r.text || '')) bot_send(chatId, 'Немає нових ТТН для реєстру.', opts);
+  else bot_sendToOwners('🗂 Реєстр створено на запит ' + bot_esc([from.first_name, from.username].filter(Boolean).join(' ')) + ' (з гілки «Реєстри»).');
+}
+
 /** /registry preview — що ввійде, нічого не створюючи. */
 function bot_registryPreview(chatId) {
   var sel = bot_regSelect(bot_readTtnRows(), bot_readOrders(), bot_descFromOrder());
