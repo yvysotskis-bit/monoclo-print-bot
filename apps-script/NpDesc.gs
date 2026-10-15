@@ -43,6 +43,9 @@ var BOT_NP_UPDATE_FIELDS_ = [
 /** Поля без персональних даних — їх значення /npdoc показує повністю (для діагностики). */
 var BOT_NP_SAFE_VIEW_ = ['PayerType', 'PaymentMethod', 'CargoType', 'ServiceType', 'SeatsAmount', 'Weight', 'Cost', 'AfterpaymentOnGoodsCost', 'BackwardDeliveryData', 'OptionsSeat', 'VolumeGeneral', 'SaturdayDelivery', 'PreferredDeliveryDate'];
 
+/** Лише для перевірки «після запису не змінилось» (не передаємо, а порівнюємо). */
+var BOT_NP_WATCH_EXTRA_ = ['BackwardDeliveryCargoType', 'BackwardDeliverySum', 'BackwardDeliveryMoney', 'Redelivery', 'CostOnSite', 'AfterpaymentOnGoodsCost', 'RecipientFullName', 'RecipientDescription', 'PayerType', 'PaymentMethod'];
+
 function bot_npHas_(v) { return v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && !v.length); }
 
 function bot_npIsZero_(v) { return typeof v !== 'object' && /^\s*0+([.,]0+)?\s*$/.test(String(v)); }
@@ -61,10 +64,16 @@ function bot_npBuildPayload(doc, text) {
   BOT_NP_UPDATE_FIELDS_.forEach(function (f) {
     var val;
     for (var i = 0; i < f[1].length && !bot_npHas_(val); i++) val = doc[f[1][i]];
+    if (!f[2] && (bot_npIsZero_(val) || /^0001-01-01/.test(String(val)))) return;   // «порожня» дата НП: 0001-01-01 — теж не передаємо
     if (!f[2] && bot_npIsZero_(val)) return;                        // необов'язкове поле зі значенням 0 / «0.00» НП не приймає назад («is invalid») — не передаємо
     if (!bot_npHas_(val)) { if (f[2]) missing.push(f[0]); return; }
     payload[f[0]] = f[0] === 'DateTime' ? bot_npDateOnly_(val) : val;
   });
+  // Накладений платіж: НП віддає його як BackwardDeliveryCargoType + BackwardDeliverySum/Money, а приймає як BackwardDeliveryData
+  if (!payload.BackwardDeliveryData) {
+    var bType = doc.BackwardDeliveryCargoType, bSum = bot_npHas_(doc.BackwardDeliverySum) && !bot_npIsZero_(doc.BackwardDeliverySum) ? doc.BackwardDeliverySum : (bot_npHas_(doc.BackwardDeliveryMoney) && !bot_npIsZero_(doc.BackwardDeliveryMoney) ? doc.BackwardDeliveryMoney : '');
+    if (bot_npHas_(bType) && bSum !== '') payload.BackwardDeliveryData = [{ PayerType: doc.BackwardDeliveryPayerType || 'Recipient', CargoType: bType, RedeliveryString: String(bSum) }];
+  }
   payload.AdditionalInformation = String(text);
   return { payload: payload, missing: missing };
 }
@@ -85,6 +94,12 @@ function bot_npDiffDocs(before, after) {
     if (f[0] === 'DateTime') { b = bot_npDateOnly_(b); a = bot_npDateOnly_(a); }
     if (!f[2]) { if (b === undefined || bot_npIsZero_(b) || !bot_npHas_(b)) b = ''; if (a === undefined || bot_npIsZero_(a) || !bot_npHas_(a)) a = ''; }   // «немає» = «0»
     if (bot_npNorm_(b) !== bot_npNorm_(a)) changed.push(f[0]);
+  });
+  // службові поля накладеного платежу / контролю оплати: після запису мають лишитись як були
+  BOT_NP_WATCH_EXTRA_.forEach(function (k) {
+    var b = before[k], a = after[k];
+    var nb = (b === undefined || bot_npIsZero_(b) || !bot_npHas_(b)) ? '' : bot_npNorm_(b), na = (a === undefined || bot_npIsZero_(a) || !bot_npHas_(a)) ? '' : bot_npNorm_(a);
+    if (nb !== na) changed.push(k);
   });
   return changed;
 }

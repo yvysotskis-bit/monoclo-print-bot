@@ -397,3 +397,22 @@ test('C: AfterpaymentOnGoodsCost = 0 не передаємо (НП: «is invalid
   assert.match(env.lastSent().text, /AfterpaymentOnGoodsCost=1509\.1/);
   assert.ok(!/380501112233/.test(env.lastSent().text));                         // телефони не показуємо
 });
+
+test('C: реальна відповідь НП (тестова ТТН): без AfterpaymentOnGoodsCost=0.00 і порожньої дати; накладений платіж із Backward*-полів; зміна Backward* після запису ловиться', () => {
+  const env = fresh(); const c = env.ctx;
+  const real = Object.assign(npDoc(TEST), { AfterpaymentOnGoodsCost: '0.00', PreferredDeliveryDate: '0001-01-01 00:00:00', SaturdayDelivery: null, CargoType: 'Parcel', Weight: '1.00', Cost: '200.00',
+    OptionsSeat: [{ volumetricVolume: '0.0006', weight: '1', cost: '200', specialCargo: false, description: null, packRef: null }] });
+  delete real.BackwardDeliveryData;
+  const p = c.bot_npBuildPayload(real, 'x');
+  assert.deepEqual([...p.missing], []);
+  assert.ok(!('AfterpaymentOnGoodsCost' in p.payload)); assert.ok(!('PreferredDeliveryDate' in p.payload)); assert.ok(!('SaturdayDelivery' in p.payload));
+  assert.equal(p.payload.OptionsSeat.length, 1); assert.ok(!('BackwardDeliveryData' in p.payload));
+  // ТТН з накладеним платежем (поля Backward*)
+  const cod = Object.assign({}, real, { BackwardDeliveryCargoType: 'Money', BackwardDeliverySum: '1509.00', BackwardDeliveryMoney: '1509.00', AfterpaymentOnGoodsCost: '1509.10' });
+  const q = c.bot_npBuildPayload(cod, 'x').payload;
+  assert.deepEqual(JSON.parse(JSON.stringify(q.BackwardDeliveryData)), [{ PayerType: 'Recipient', CargoType: 'Money', RedeliveryString: '1509.00' }]);
+  assert.equal(q.AfterpaymentOnGoodsCost, '1509.10');
+  // якщо після запису накладений платіж зник — помилка
+  const lost = Object.assign({}, cod, { BackwardDeliverySum: '0.00', BackwardDeliveryMoney: '0.00', BackwardDeliveryCargoType: '' });
+  assert.ok(c.bot_npDiffDocs(cod, lost).includes('BackwardDeliverySum'));
+});
