@@ -2002,6 +2002,19 @@ function bot_overflowTexts_(items) {
   ];
 }
 
+/** Номери → «14732-14750» для послідовних серій з 3+ номерів; решта через кому. */
+function bot_numberRanges(nos) {
+  var a = nos.map(Number).filter(function (n) { return n > 0; }).sort(function (x, y) { return x - y; });
+  var out = [], i = 0;
+  while (i < a.length) {
+    var j = i;
+    while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++;
+    if (j - i >= 2) out.push(a[i] + '-' + a[j]); else for (var k = i; k <= j; k++) out.push(String(a[k]));
+    i = j + 1;
+  }
+  return out.join(', ');
+}
+
 /**
  * Основна функція модуля B.
  * @return {text, len, level (1..6 — драбина, 7..9 — переповнення), overflow:boolean (не влізло навіть у номери)}
@@ -2026,7 +2039,9 @@ function bot_buildDescription(list, limit) {
   for (var k = 0; k < ov.length; k++) {
     if (bot_len(ov[k]) <= limit) return { text: ov[k], len: bot_len(ov[k]), level: 7 + k, overflow: false };
   }
-  return { text: ov[2], len: bot_len(ov[2]), level: 9, overflow: true };       // навіть номери не влізли → потрібне рішення власника
+  var rg = bot_urgentPrefix_(items) + bot_numberRanges(items.map(function (i) { return i.no; }));
+  if (bot_len(rg) <= limit) return { text: rg, len: bot_len(rg), level: 10, overflow: false };      // послідовні номери діапазоном
+  return { text: ov[2], len: bot_len(ov[2]), level: 9, overflow: true };       // навіть так не влізло → потрібне рішення власника
 }
 
 /** Перевірка: чи в описі збережено номери, розміри, «БЕЗ ФЛІСУ» і «хN» (для рівнів 1–6; на рівнях переповнення — лише номери). */

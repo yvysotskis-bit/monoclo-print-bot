@@ -49,7 +49,7 @@ test('Переповнення: «номер + річ», далі лише но�
   assert.ok(r.len <= 100, r.text + ' ' + r.len);
   assert.ok(r.text.startsWith('ТЕРМІНОВО '));
   assert.ok(r.level >= 8);
-  const nums = desc(`${Array.from({ length: 30 }, (_, i) => `${15300 + i}. Принт A\nФутболка чорна\nM\nПринт позаду`).join('\n\n')}\n\n${TTN}`);
+  const nums = desc(`${Array.from({ length: 30 }, (_, i) => `${15300 + i * 2}. Принт A\nФутболка чорна\nM\nПринт позаду`).join('\n\n')}\n\n${TTN}`);
   assert.equal(nums.overflow, true);                 // не влізло навіть у номери → рішення власника
 });
 
@@ -95,4 +95,13 @@ test('х1/х3/х4 — код кольору худі (чорний/білий/г
   assert.equal(c('x2').color, 'Білий'); assert.equal(c('x2').colorCode, 2); assert.deepEqual(JSON.parse(JSON.stringify(c('x2').issues)), []);
   const row = B.bot_buildOrderFields_(c('х3'), new Date(), [{ type: 'Худі не утеплене', price: 740, from: null }], 'В роботі');
   assert.equal(row.fields.cost, 740);
+});
+
+test('Крайнє переповнення: послідовні номери діапазоном (19 замовлень в одній ТТН)', () => {
+  const R = B.bot_numberRanges;
+  assert.equal(R([14732, 14733, 14734, 14735, 14750]), '14732-14735, 14750');
+  assert.equal(R([1, 2, 4, 5]), '1, 2, 4, 5');
+  const blocks = Array.from({ length: 19 }, (_, i) => `${14732 + i}. Принт A\nХуді x1 БЕЗ ФЛІСУ\nXL\nПринт позаду`);
+  const r = desc(`${blocks.join('\n\n')}\n\n${TTN}`);
+  assert.equal(r.text, '14732-14750'); assert.equal(r.overflow, false); assert.ok(r.len <= 100);
 });
