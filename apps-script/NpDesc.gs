@@ -212,6 +212,9 @@ function bot_ttnProcess() {
     }
   });
   bot_ttnPatch(patches);
+  var okNow = patches.filter(function (p) { return p.fields.status === 'Записано в НП'; }).length;
+  var left = bot_readTtnRows().filter(function (r) { return r.status === 'Новий'; }).length;
+  if (okNow && (okNow >= 3 || left > 0)) bot_sendToOwners('✅ Записано в НП: ' + okNow + ' ТТН' + (left ? ' · лишилось в черзі: ' + left + ' (по ~6 на хвилину)' : ' · черга порожня'));
   if (errs.length) bot_sendToOwners('❌ <b>Помилка НП</b> — опис не записано (повторів не буде, ТТН не піде в реєстр, доки ви не вирішите):\n\n' + errs.join('\n') + '\n\nСвій текст: <code>/setdesc ТТН текст</code>.');
 }
 

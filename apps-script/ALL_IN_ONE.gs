@@ -1482,8 +1482,9 @@ function bot_onMessage(msg, edited) {
       return bot_cmdBind(msg, cmd.arg);
     }
     var payChat = bot_setting('PAY_CHAT_ID');
-    if (payChat && String(chat.id) === String(payChat)) return bot_handlePayMessage(msg, edited);   // чат «Отправка отчет»
     var groupId = bot_setting('GROUP_CHAT_ID');
+    var isOrdersChat = groupId && String(chat.id) === String(groupId) && bot_threadOf(msg) === String(bot_setting('ORDERS_THREAD_ID'));
+    if (payChat && String(chat.id) === String(payChat) && !isOrdersChat) return bot_handlePayMessage(msg, edited);   // чат «Отправка отчет» (ніколи не перехоплює гілку замовлень)
     if (!groupId || String(chat.id) !== String(groupId)) return;                       // чужа група
     var ordersThread = bot_setting('ORDERS_THREAD_ID');
     if (ordersThread === '' ) return;
@@ -1561,6 +1562,7 @@ function bot_onCommand(msg, c) {
     case 'registry': return bot_cmdRegistry(chatId, c.arg);
     case 'live': return bot_cmdLive(chatId);
     case 'retry': return bot_cmdRetry(chatId, c.arg);
+    case 'unbind': if (String(c.arg).trim().toLowerCase() === 'payments') { bot_setSetting('PAY_CHAT_ID', ''); bot_setSetting('PAY_THREAD_ID', ''); return bot_send(chatId, 'Чат оплат відключено.'); } return bot_send(chatId, 'Формат: <code>/unbind payments</code>');
     case 'preview': return bot_cmdPreviewMode(chatId);
     case 'npdoc': return bot_cmdNpDoc(chatId, c.arg);
     case 'nptest': return bot_cmdNpTest(chatId, c.arg);
@@ -1574,7 +1576,12 @@ function bot_cmdBind(msg, arg) {
   var chatId = msg.chat.id, thread = bot_threadOf(msg);
   var opts = thread !== '0' ? { thread: thread } : {};
   if (what === 'registry') what = 'report';
-  if (what === 'payments') {                                      // чат «Отправка отчет»: у ньому бот НІЧОГО не пише, підтвердження — лише власнику в особисті
+  if (what === 'payments') {
+    var ordersGroup = bot_setting('GROUP_CHAT_ID');
+    if (ordersGroup && String(chatId) === String(ordersGroup) && thread === bot_setting('ORDERS_THREAD_ID')) {
+      bot_sendToOwners('⛔ Це гілка замовлень — тут `/bind payments` не підключаю, інакше замовлення перестали б прийматись. Напишіть <code>/bind payments</code> у чаті «Отправка отчет».');
+      return;
+    }                                      // чат «Отправка отчет»: у ньому бот НІЧОГО не пише, підтвердження — лише власнику в особисті
     bot_withLock(function () { bot_setSetting('PAY_CHAT_ID', chatId); bot_setSetting('PAY_THREAD_ID', thread); });
     bot_log('ІНФО', 'bind payments', 'chat ' + chatId + ' thread ' + thread);
     bot_sendToOwners('✅ Чат «' + bot_esc((msg.chat && msg.chat.title) || chatId) + '» підключено для оплат: повідомлення власника виду <code>+10 000</code>, <code>+15к</code> стануть оплатами. У тому чаті бот нічого не пише.');
@@ -3850,6 +3857,9 @@ function bot_ttnProcess() {
     }
   });
   bot_ttnPatch(patches);
+  var okNow = patches.filter(function (p) { return p.fields.status === 'Записано в НП'; }).length;
+  var left = bot_readTtnRows().filter(function (r) { return r.status === 'Новий'; }).length;
+  if (okNow && (okNow >= 3 || left > 0)) bot_sendToOwners('✅ Записано в НП: ' + okNow + ' ТТН' + (left ? ' · лишилось в черзі: ' + left + ' (по ~6 на хвилину)' : ' · черга порожня'));
   if (errs.length) bot_sendToOwners('❌ <b>Помилка НП</b> — опис не записано (повторів не буде, ТТН не піде в реєстр, доки ви не вирішите):\n\n' + errs.join('\n') + '\n\nСвій текст: <code>/setdesc ТТН текст</code>.');
 }
 

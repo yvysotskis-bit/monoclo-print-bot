@@ -548,3 +548,17 @@ test('Чат «Отправка отчет»: /bind payments, «+10 000» вла
   assert.equal(c.bot_readPayments().length, 1); assert.equal(c.bot_readPayments()[0].sum, 12000);
   assert.ok(env.sentTo(OWNER).some(s => /виправлено/.test(s.text)));
 });
+
+test('/bind payments у гілці замовлень відхиляється; гілку замовлень оплати не перехоплюють; /unbind payments', () => {
+  const env = fresh(); const c = env.ctx;
+  c.bot_setSetting('PAY_CHAT_ID', String(GROUP));                                       // як ніби прив'язали помилково (той самий чат, що й замовлення)
+  env.update(groupMsg(MSG2)); env.poll();
+  assert.equal(c.bot_readOrders().length, 1);                                           // замовлення приймаються, оплати не перехопили
+  c.bot_setSetting('PAY_CHAT_ID', '');
+  env.update({ message: { message_id: ++mid, date: ts('2026-10-07T05:00:00Z'), chat: { id: GROUP, type: 'supergroup', title: 'Виробництво' }, from: { id: OWNER }, is_topic_message: true, message_thread_id: ORD_T, text: '/bind payments' } }); env.poll();
+  assert.equal(c.bot_setting('PAY_CHAT_ID'), '');
+  assert.ok(env.sentTo(OWNER).some(s => /гілка замовлень/.test(s.text)));
+  c.bot_setSetting('PAY_CHAT_ID', '-100777');
+  env.update(privMsg('/unbind payments')); env.poll();
+  assert.equal(c.bot_setting('PAY_CHAT_ID'), '');
+});
