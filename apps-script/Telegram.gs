@@ -194,7 +194,7 @@ function bot_pollEnter_(now) {
   if (!lock.tryLock(3000)) return false;
   try {
     var ts = Number(bot_prop(BOT_PROP.POLL_LOCK_TS) || 0);
-    if (ts && now - ts < 290000) return false;               // попередній запуск ще працює
+    if (ts && now - ts < 370000) return false;               // попередній запуск ще працює (ліміт Apps Script — 6 хв = 360 с; раніше другий запуск міг накластися на довгий перший)
     bot_setProp(BOT_PROP.POLL_LOCK_TS, now);
     return true;
   } finally { lock.releaseLock(); }

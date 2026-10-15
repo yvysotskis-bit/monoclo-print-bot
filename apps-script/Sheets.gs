@@ -360,7 +360,7 @@ function bot_formulaSep_(sheet) {
       if (cell.getValue() === 2) sep = ';';
     }
     cell.clear();
-  } catch (e) { bot_log('УВАГА', 'роздільник формул', e.message); }
+  } catch (e) { bot_log('УВАГА', 'роздільник формул', e.message); return ','; }     // не кешуємо невдале визначення: наступного разу спробуємо ще раз
   BOT_CACHE_.sep = sep;
   return sep;
 }

@@ -1166,7 +1166,7 @@ function bot_formulaSep_(sheet) {
       if (cell.getValue() === 2) sep = ';';
     }
     cell.clear();
-  } catch (e) { bot_log('УВАГА', 'роздільник формул', e.message); }
+  } catch (e) { bot_log('УВАГА', 'роздільник формул', e.message); return ','; }     // не кешуємо невдале визначення: наступного разу спробуємо ще раз
   BOT_CACHE_.sep = sep;
   return sep;
 }
@@ -1384,7 +1384,7 @@ function bot_pollEnter_(now) {
   if (!lock.tryLock(3000)) return false;
   try {
     var ts = Number(bot_prop(BOT_PROP.POLL_LOCK_TS) || 0);
-    if (ts && now - ts < 290000) return false;               // попередній запуск ще працює
+    if (ts && now - ts < 370000) return false;               // попередній запуск ще працює (ліміт Apps Script — 6 хв = 360 с; раніше другий запуск міг накластися на довгий перший)
     bot_setProp(BOT_PROP.POLL_LOCK_TS, now);
     return true;
   } finally { lock.releaseLock(); }
