@@ -539,7 +539,8 @@ function bot_addPaymentRow_(reconId, sum, dateOpt) {
     arr[map.no - 1] = lastNo + 1; arr[map.date - 1] = dateOpt || bot_today(); arr[map.sum - 1] = sum; arr[map.recon - 1] = reconId;
     sh.getRange(row, 1, 1, width).setValues([arr]);
     sh.getRange(row, map.date).setNumberFormat('dd.mm.yyyy');
-    if (map.accum) sh.getRange(row, map.accum).setFormula('=SUM($' + bot_colLetter(map.sum) + '$2:' + bot_colLetter(map.sum) + row + ')');
+    // накопичено — лише оплати ПІСЛЯ дати початкового залишку (раніші вже в ньому); без залишку «Підсумки»!H6 = 0 → усі
+    if (map.accum) sh.getRange(row, map.accum).setFormula(bot_fx('=SUMIFS($' + bot_colLetter(map.sum) + '$2:' + bot_colLetter(map.sum) + row + ',$' + bot_colLetter(map.date) + '$2:' + bot_colLetter(map.date) + row + ',">"&\'' + BOT_SHEETS.summary + '\'!$H$6)'));
     if (map.cost) sh.getRange(row, map.cost).setFormula("='" + BOT_SHEETS.summary + "'!$A$5");
     if (map.balance && map.cost && map.accum) sh.getRange(row, map.balance).setFormula('=' + bot_colLetter(map.cost) + row + '-' + bot_colLetter(map.accum) + row);
     SpreadsheetApp.flush();

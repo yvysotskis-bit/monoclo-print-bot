@@ -230,12 +230,27 @@ function bot_fmtDelta(cur, prev) {
   return ' ' + (pct > 0 ? '▲ +' : '▼ −') + Math.abs(pct) + '%';
 }
 
+/**
+ * Покриття собівартості оплатами за місяць: 🟢 покрито (оплачено ≥ собівартості), 🟡 недоплата (≤ redPct % собівартості),
+ * 🔴 велика різниця (більше). Без собівартості — порожньо.
+ */
+function bot_coverageStatus(cost, paid, redPct) {
+  cost = Number(cost) || 0; paid = Number(paid) || 0;
+  if (cost <= 0) return { icon: '', label: '', diff: 0 };
+  var diff = bot_round2(paid - cost);
+  if (diff >= 0) return { icon: '🟢', label: diff > 0 ? 'Покрито (переплата)' : 'Покрито', diff: diff };
+  var pct = (redPct === undefined || redPct === null || isNaN(Number(redPct))) ? 10 : Number(redPct);
+  return (-diff <= cost * pct / 100) ? { icon: '🟡', label: 'Недоплата', diff: diff } : { icon: '🔴', label: 'Велика різниця', diff: diff };
+}
+
 function bot_buildMonthReport(cur, prev) {
   var L = ['📊 <b>Місячний звіт · ' + BOT_MONTHS_UA[cur.m - 1] + ' ' + cur.y + '</b>', ''];
   L.push('Замовлено виробів: <b>' + cur.items + '</b>' + bot_fmtDelta(cur.items, prev && prev.items));
   L.push('   футболок ' + cur.byType['Футболка'] + ' · худі фліс ' + cur.byType['Худі фліс'] + ' · худі не утеплене ' + cur.byType['Худі не утеплене'] + (cur.stickers ? ' · стікерпаків ' + cur.stickers : ''));
   L.push('Собівартість: <b>' + bot_fmtMoney(cur.cost) + '</b>' + bot_fmtDelta(cur.cost, prev && prev.cost));
   L.push('Оплачено: <b>' + bot_fmtMoney(cur.paid) + '</b>' + bot_fmtDelta(cur.paid, prev && prev.paid));
+  var cov = bot_coverageStatus(cur.cost, cur.paid, cur.redPct);
+  if (cov.icon) L.push(cov.icon + ' Покриття собівартості: ' + cov.label + ' (' + (cov.diff >= 0 ? '+' : '−') + bot_fmtMoney(Math.abs(cov.diff)) + ')');
   L.push('Борг на кінець місяця: <b>' + bot_fmtMoney(cur.debtEnd) + '</b>' + bot_fmtDelta(cur.debtEnd, prev && prev.debtEnd));
   L.push('Відмови: ' + cur.refusals + ' шт · ' + bot_fmtMoney(cur.refusalsSum) + ' · ' + bot_fmtDec(cur.refusalPct) + '% від посилок з кінцевим статусом' + bot_fmtDelta(cur.refusalPct, prev && prev.refusalPct));
   var s = cur.speed;

@@ -338,17 +338,34 @@ test('Оплати з чату «Отправка отчет»: розбір с�
     { id: 7, text: '+9000', date: d(2026, 9, 30) }, { id: 8, text: '+10 000', date: d(2026, 10, 12) }, { id: 9, text: '+ щось', date: d(2026, 10, 13) }];
   c.bot_setSetting('OPENING_DEBT', '2227020'); c.bot_setSetting('OPENING_ORDERS_AFTER', '31.08.2026'); c.bot_setSetting('OPENING_PAYS_AFTER', '08.09.2026');
   const op = c.bot_openingFromSettings();
-  const plan = c.bot_planPayImport(msgs, { after: op.paysAfter, existingIds: [] });
-  assert.equal(plan.rows.length, 5); assert.equal(plan.total, 21401 + 14300 + 25000 + 9000 + 10000); assert.equal(plan.skippedOld, 2); assert.equal(plan.unclear.length, 1);
-  assert.equal(c.bot_payImportApply(plan), 5);
-  const plan2 = c.bot_planPayImport(msgs, { after: op.paysAfter, existingIds: c.bot_existingPayKeys_() });
-  assert.equal(plan2.rows.length, 0); assert.equal(plan2.skippedExisting, 5);
+  const plan = c.bot_planPayImport(msgs, { after: op.ordersAfter, existingIds: [] });
+  assert.equal(plan.rows.length, 6); assert.equal(plan.total, 20000 + 21401 + 14300 + 25000 + 9000 + 10000); assert.equal(plan.skippedOld, 1); assert.equal(plan.unclear.length, 1);
+  assert.equal(c.bot_payImportApply(plan), 6);
+  const plan2 = c.bot_planPayImport(msgs, { after: op.ordersAfter, existingIds: c.bot_existingPayKeys_() });
+  assert.equal(plan2.rows.length, 0); assert.equal(plan2.skippedExisting, 6);
   assert.equal(c.bot_payImportApply(plan), 0);                                    // повтор — без дублів
   const pays = c.bot_readPayments();
-  assert.equal(pays.length, 5);
+  assert.equal(pays.length, 6);   // оплата 08.09 збережена (для покриття місяця), але в борг не йде
   assert.equal(c.bot_computeDebt([], pays, op).debt, 2227020 - 79701);
   env.props.TG_TOKEN = '123:ABCDEFGHIJKLMNOPQRSTUVWXYZ'; c.bot_setSetting('OWNER_IDS', String(OWNER));
   c.bot_cmdAddPay(OWNER, '5к 14.10.2026');
-  assert.equal(c.bot_readPayments().length, 6);
+  assert.equal(c.bot_readPayments().length, 7);
   assert.match(env.lastSent().text, /5\s?000/);
+});
+
+test('Покриття собівартості місяця: 🟢 покрито / 🟡 недоплата ≤ порогу / 🔴 велика різниця; формули на «Підсумках»', () => {
+  const env = fresh(); const c = env.ctx;
+  const S = (cost, paid, pct) => { const r = c.bot_coverageStatus(cost, paid, pct); return r.icon + '|' + r.diff; };
+  assert.equal(S(100000, 100000), '🟢|0'); assert.equal(S(100000, 120000), '🟢|20000');
+  assert.equal(S(100000, 91000, 10), '🟡|-9000'); assert.equal(S(100000, 90000, 10), '🟡|-10000'); assert.equal(S(100000, 89999, 10), '🔴|-10001');
+  assert.equal(S(0, 5000), '|0'); assert.equal(S(100000, 0), '🔴|-100000');
+  const v = env.sheet('Підсумки').getDataRange().getValues();
+  const flat = [].concat(...v).filter(x => typeof x === 'string');
+  assert.ok(flat.some(f => f.includes('Покриття собівартості')));
+  assert.ok(flat.some(f => f.startsWith('=IF($G') && f.includes('🟢 Покрито') && f.includes('🟡 Недоплата') && f.includes('🔴 Велика різниця')));
+  assert.ok(flat.some(f => f.includes('PAY_RED_PERCENT')));
+  // місячний звіт містить рядок покриття
+  const cur = c.bot_monthMetrics([{ date: c.bot_makeDate(2026, 9, 5), cost: 100000, status: 'В роботі', type: 'Футболка', print: 'A' }], [{ date: c.bot_makeDate(2026, 9, 6), sum: 50000 }], 2026, 9);
+  cur.redPct = 10;
+  assert.match(c.bot_buildMonthReport(cur, null), /🔴 Покриття собівартості: Велика різниця/);
 });

@@ -44,7 +44,7 @@ function bot_planPayImport(messages, opts) {
 
 function bot_payPlanText(plan, done) {
   var L = [done ? '✅ Оплати додано' : 'Знайдено в експорті'];
-  L.push((done ? 'Додано' : 'Буде додано') + ' оплат: ' + plan.rows.length + ' на ' + bot_fmtMoney(plan.total) + '. Пропущено: до 08.09 (вже в початковому залишку) ' + plan.skippedOld + ', уже є в таблиці ' + plan.skippedExisting + '.');
+  L.push((done ? 'Додано' : 'Буде додано') + ' оплат: ' + plan.rows.length + ' на ' + bot_fmtMoney(plan.total) + ' (оплати до 08.09 йдуть лише в покриття місяця, у борг не рахуються). Пропущено: до вересня ' + plan.skippedOld + ', уже є в таблиці ' + plan.skippedExisting + '.');
   plan.rows.slice(0, 30).forEach(function (r) { L.push('• ' + bot_fmtDate(r.date) + ' — ' + bot_fmtMoney(r.sum) + '  («' + r.text + '»)'); });
   if (plan.unclear.length) L.push('⚠️ Не зрозумів суму: ' + plan.unclear.join(' | '));
   return L.join('\n');
@@ -68,11 +68,11 @@ function bot_existingPayKeys_() {
 
 function bot_menuPayImport() {
   var ui = bot_ui_();
-  var r = ui.prompt('Імпорт оплат з експорту Telegram', 'Вставте посилання на messages.html з чату «Отправка отчет» (завантажений на ваш Google Диск). Беру повідомлення виду «+15к», «+ 21 401», «+14300» з датою ПІСЛЯ ' + bot_setting('OPENING_PAYS_AFTER', '08.09.2026') + '. Спершу покажу список.', ui.ButtonSet.OK_CANCEL);
+  var r = ui.prompt('Імпорт оплат з експорту Telegram', 'Вставте посилання на messages.html з чату «Отправка отчет» (завантажений на ваш Google Диск). Беру повідомлення виду «+15к», «+ 21 401», «+14300» починаючи з вересня (для покриття собівартості по місяцях). У борг рахуються лише оплати після ' + bot_setting('OPENING_PAYS_AFTER', '08.09.2026') + ' — раніші вже в початковому залишку. Спершу покажу список.', ui.ButtonSet.OK_CANCEL);
   if (r.getSelectedButton() !== ui.Button.OK) return;
   try {
     var op = bot_openingFromSettings();
-    var plan = bot_planPayImport(bot_tgReadMessages_(r.getResponseText()), { after: op ? op.paysAfter : null, existingIds: bot_existingPayKeys_() });
+    var plan = bot_planPayImport(bot_tgReadMessages_(r.getResponseText()), { after: op ? op.ordersAfter : null, existingIds: bot_existingPayKeys_() });
     if (!plan.rows.length) { bot_alert_('Нових оплат немає', bot_payPlanText(plan, false)); return; }
     if (ui.alert('Додати оплати?', bot_payPlanText(plan, false) + '\n\nДодати їх в аркуш «Оплати»?', ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
     var n = bot_payImportApply(plan);

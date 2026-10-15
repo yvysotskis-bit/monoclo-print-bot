@@ -179,6 +179,7 @@ var BOT_DEFAULT_SETTINGS = [
   ['OPENING_DEBT', '2227020', 'Початковий залишок боргу, грн (борг станом на 31.08.2026 з урахуванням оплат по 08.09.2026 включно). Порожньо — не враховувати'],
   ['OPENING_ORDERS_AFTER', '31.08.2026', 'У собівартість беруться замовлення з датою ПІСЛЯ цієї (раніші вже в початковому залишку)'],
   ['OPENING_PAYS_AFTER', '08.09.2026', 'В оплати беруться платежі з датою ПІСЛЯ цієї (до неї включно — вже в початковому залишку)'],
+  ['PAY_RED_PERCENT', '10', 'Покриття місяця: оплачено менше собівартості, але не більше ніж на цей % — «жовтий» (недоплата); більше — «червоний» (велика різниця); не менше собівартості — «зелений»'],
   ['DESC_LIMIT', '100', 'Максимум символів в описі ТТН (Додаткова інформація в Новій пошті)'],
   ['DESC_FROM_ORDER', '15088', 'Описи й реєстр — лише для ТТН, де є замовлення з номером БІЛЬШЕ за це (старіші бот не чіпає)'],
   ['NP_MODE', 'перевірка', 'Режим запису в Нову пошту: «перевірка» (нічого не пишемо, лише надсилаємо власнику) або «бойовий»'],
@@ -3016,7 +3017,8 @@ function bot_addPaymentRow_(reconId, sum, dateOpt) {
     arr[map.no - 1] = lastNo + 1; arr[map.date - 1] = dateOpt || bot_today(); arr[map.sum - 1] = sum; arr[map.recon - 1] = reconId;
     sh.getRange(row, 1, 1, width).setValues([arr]);
     sh.getRange(row, map.date).setNumberFormat('dd.mm.yyyy');
-    if (map.accum) sh.getRange(row, map.accum).setFormula('=SUM($' + bot_colLetter(map.sum) + '$2:' + bot_colLetter(map.sum) + row + ')');
+    // накопичено — лише оплати ПІСЛЯ дати початкового залишку (раніші вже в ньому); без залишку «Підсумки»!H6 = 0 → усі
+    if (map.accum) sh.getRange(row, map.accum).setFormula(bot_fx('=SUMIFS($' + bot_colLetter(map.sum) + '$2:' + bot_colLetter(map.sum) + row + ',$' + bot_colLetter(map.date) + '$2:' + bot_colLetter(map.date) + row + ',">"&\'' + BOT_SHEETS.summary + '\'!$H$6)'));
     if (map.cost) sh.getRange(row, map.cost).setFormula("='" + BOT_SHEETS.summary + "'!$A$5");
     if (map.balance && map.cost && map.accum) sh.getRange(row, map.balance).setFormula('=' + bot_colLetter(map.cost) + row + '-' + bot_colLetter(map.accum) + row);
     SpreadsheetApp.flush();
@@ -3165,7 +3167,7 @@ function bot_planPayImport(messages, opts) {
 
 function bot_payPlanText(plan, done) {
   var L = [done ? '✅ Оплати додано' : 'Знайдено в експорті'];
-  L.push((done ? 'Додано' : 'Буде додано') + ' оплат: ' + plan.rows.length + ' на ' + bot_fmtMoney(plan.total) + '. Пропущено: до 08.09 (вже в початковому залишку) ' + plan.skippedOld + ', уже є в таблиці ' + plan.skippedExisting + '.');
+  L.push((done ? 'Додано' : 'Буде додано') + ' оплат: ' + plan.rows.length + ' на ' + bot_fmtMoney(plan.total) + ' (оплати до 08.09 йдуть лише в покриття місяця, у борг не рахуються). Пропущено: до вересня ' + plan.skippedOld + ', уже є в таблиці ' + plan.skippedExisting + '.');
   plan.rows.slice(0, 30).forEach(function (r) { L.push('• ' + bot_fmtDate(r.date) + ' — ' + bot_fmtMoney(r.sum) + '  («' + r.text + '»)'); });
   if (plan.unclear.length) L.push('⚠️ Не зрозумів суму: ' + plan.unclear.join(' | '));
   return L.join('\n');
@@ -3189,11 +3191,11 @@ function bot_existingPayKeys_() {
 
 function bot_menuPayImport() {
   var ui = bot_ui_();
-  var r = ui.prompt('Імпорт оплат з експорту Telegram', 'Вставте посилання на messages.html з чату «Отправка отчет» (завантажений на ваш Google Диск). Беру повідомлення виду «+15к», «+ 21 401», «+14300» з датою ПІСЛЯ ' + bot_setting('OPENING_PAYS_AFTER', '08.09.2026') + '. Спершу покажу список.', ui.ButtonSet.OK_CANCEL);
+  var r = ui.prompt('Імпорт оплат з експорту Telegram', 'Вставте посилання на messages.html з чату «Отправка отчет» (завантажений на ваш Google Диск). Беру повідомлення виду «+15к», «+ 21 401», «+14300» починаючи з вересня (для покриття собівартості по місяцях). У борг рахуються лише оплати після ' + bot_setting('OPENING_PAYS_AFTER', '08.09.2026') + ' — раніші вже в початковому залишку. Спершу покажу список.', ui.ButtonSet.OK_CANCEL);
   if (r.getSelectedButton() !== ui.Button.OK) return;
   try {
     var op = bot_openingFromSettings();
-    var plan = bot_planPayImport(bot_tgReadMessages_(r.getResponseText()), { after: op ? op.paysAfter : null, existingIds: bot_existingPayKeys_() });
+    var plan = bot_planPayImport(bot_tgReadMessages_(r.getResponseText()), { after: op ? op.ordersAfter : null, existingIds: bot_existingPayKeys_() });
     if (!plan.rows.length) { bot_alert_('Нових оплат немає', bot_payPlanText(plan, false)); return; }
     if (ui.alert('Додати оплати?', bot_payPlanText(plan, false) + '\n\nДодати їх в аркуш «Оплати»?', ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
     var n = bot_payImportApply(plan);
@@ -4309,12 +4311,27 @@ function bot_fmtDelta(cur, prev) {
   return ' ' + (pct > 0 ? '▲ +' : '▼ −') + Math.abs(pct) + '%';
 }
 
+/**
+ * Покриття собівартості оплатами за місяць: 🟢 покрито (оплачено ≥ собівартості), 🟡 недоплата (≤ redPct % собівартості),
+ * 🔴 велика різниця (більше). Без собівартості — порожньо.
+ */
+function bot_coverageStatus(cost, paid, redPct) {
+  cost = Number(cost) || 0; paid = Number(paid) || 0;
+  if (cost <= 0) return { icon: '', label: '', diff: 0 };
+  var diff = bot_round2(paid - cost);
+  if (diff >= 0) return { icon: '🟢', label: diff > 0 ? 'Покрито (переплата)' : 'Покрито', diff: diff };
+  var pct = (redPct === undefined || redPct === null || isNaN(Number(redPct))) ? 10 : Number(redPct);
+  return (-diff <= cost * pct / 100) ? { icon: '🟡', label: 'Недоплата', diff: diff } : { icon: '🔴', label: 'Велика різниця', diff: diff };
+}
+
 function bot_buildMonthReport(cur, prev) {
   var L = ['📊 <b>Місячний звіт · ' + BOT_MONTHS_UA[cur.m - 1] + ' ' + cur.y + '</b>', ''];
   L.push('Замовлено виробів: <b>' + cur.items + '</b>' + bot_fmtDelta(cur.items, prev && prev.items));
   L.push('   футболок ' + cur.byType['Футболка'] + ' · худі фліс ' + cur.byType['Худі фліс'] + ' · худі не утеплене ' + cur.byType['Худі не утеплене'] + (cur.stickers ? ' · стікерпаків ' + cur.stickers : ''));
   L.push('Собівартість: <b>' + bot_fmtMoney(cur.cost) + '</b>' + bot_fmtDelta(cur.cost, prev && prev.cost));
   L.push('Оплачено: <b>' + bot_fmtMoney(cur.paid) + '</b>' + bot_fmtDelta(cur.paid, prev && prev.paid));
+  var cov = bot_coverageStatus(cur.cost, cur.paid, cur.redPct);
+  if (cov.icon) L.push(cov.icon + ' Покриття собівартості: ' + cov.label + ' (' + (cov.diff >= 0 ? '+' : '−') + bot_fmtMoney(Math.abs(cov.diff)) + ')');
   L.push('Борг на кінець місяця: <b>' + bot_fmtMoney(cur.debtEnd) + '</b>' + bot_fmtDelta(cur.debtEnd, prev && prev.debtEnd));
   L.push('Відмови: ' + cur.refusals + ' шт · ' + bot_fmtMoney(cur.refusalsSum) + ' · ' + bot_fmtDec(cur.refusalPct) + '% від посилок з кінцевим статусом' + bot_fmtDelta(cur.refusalPct, prev && prev.refusalPct));
   var s = cur.speed;
@@ -4513,7 +4530,8 @@ function bot_sendStorageReportToOwners_() {
 function bot_sendMonthly_(chatId, y, m, silentOnEmpty) {
   var orders = bot_readOrders(), pays = bot_readPayments();
   var op = bot_openingFromSettings();
-  var cur = bot_monthMetrics(orders, pays, y, m, op);
+  var redPct = Number(bot_setting('PAY_RED_PERCENT', '10'));
+  var cur = bot_monthMetrics(orders, pays, y, m, op); cur.redPct = redPct;
   var pv = bot_prevYm(y, m);
   var prev = bot_monthMetrics(orders, pays, pv.y, pv.m, op);
   bot_sendMany(chatId, bot_splitText(bot_buildMonthReport(cur, prev), 3900));
@@ -4571,6 +4589,10 @@ function bot_buildSummary() {
     return 'SUMIFS(' + R('cost') + ',' + extra + R('status') + ',' + W + ',' + R('ttnDate') + ',">="&' + s + ',' + R('ttnDate') + ',"<"&' + e + ')+' +
            'SUMIFS(' + R('cost') + ',' + extra + R('status') + ',' + W + ',' + R('ttnDate') + ',"",' + R('date') + ',">="&' + s + ',' + R('date') + ',"<"&' + e + ')';
   }
+  /** Статус покриття: 🟢 оплачено ≥ собівартості · 🟡 недоплата ≤ порогу % · 🔴 більше. */
+  function covStatus(cost, paid) {
+    return 'IF(' + cost + '<=0,"",IF(' + paid + '>=' + cost + ',"🟢 Покрито",IF(' + cost + '-' + paid + '<=' + cost + '*$H$7/100,"🟡 Недоплата","🔴 Велика різниця")))';
+  }
   function crit(key, val) { return R(key) + ',"' + val + '",'; }
 
   sh.clear();
@@ -4591,6 +4613,8 @@ function bot_buildSummary() {
   sh.getRange('H4').setFormula(bot_fx('=IFERROR(VALUE(' + S('OPENING_DEBT') + '),0)')).setNumberFormat(money).setFontColor('#999999');
   sh.getRange('G5').setValue('Замовлення після').setFontColor('#999999');
   sh.getRange('H5').setFormula(bot_fx('=' + D('OPENING_ORDERS_AFTER'))).setNumberFormat('dd.mm.yyyy').setFontColor('#999999');
+  sh.getRange('G7').setValue('Поріг «червоного», %').setFontColor('#999999');
+  sh.getRange('H7').setFormula(bot_fx('=IFERROR(VALUE(' + S('PAY_RED_PERCENT') + '),10)')).setFontColor('#999999');
   sh.getRange('G6').setValue('Оплати після').setFontColor('#999999');
   sh.getRange('H6').setFormula(bot_fx('=' + D('OPENING_PAYS_AFTER'))).setNumberFormat('dd.mm.yyyy').setFontColor('#999999');
   sh.getRange('A6').setFormula(bot_fx('=IF($H$4>0,"У собівартість і борг входить початковий залишок "&TEXT($H$4,"# ##0")&" грн (борг станом на 31.08.2026 з оплатами по 08.09.2026 включно)","")')).setFontColor('#666666').setFontStyle('italic');
@@ -4639,6 +4663,9 @@ function bot_buildSummary() {
   sh.getRange('C17').setFormula(bot_fx('=' + monthSum('', '$H$1', '$H$2'))).setNumberFormat(money).setFontWeight('bold');
   sh.getRange('A18').setValue('Оплачено за місяць');
   sh.getRange('B18').setFormula(bot_fx('=SUMIFS(' + P('sum') + ',' + P('date') + ',">="&$H$1,' + P('date') + ',"<"&$H$2)')).setNumberFormat(money);
+  // покриття поточного місяця: оплачено проти собівартості
+  sh.getRange('D18').setFormula(bot_fx('=' + covStatus('$C$17', '$B$18')));
+  sh.getRange('E18').setFormula(bot_fx('=IF($C$17>0,$B$18-$C$17,"")')).setNumberFormat('+#,##0" грн";-#,##0" грн"');
   sh.getRange('A19').setValue('Відмови: шт. · грн · % від отриманих+відмов');
   sh.getRange('B19').setFormula(bot_fx('=' + monthCount(crit('stage', 'Відмова'), '$H$1', '$H$2')));
   sh.getRange('C19').setFormula(bot_fx('=' + monthSum(crit('stage', 'Відмова'), '$H$1', '$H$2'))).setNumberFormat(money);
@@ -4669,8 +4696,8 @@ function bot_buildSummary() {
 
   // ---- По місяцях (12 останніх) ----
   var mr = 39;
-  bot_sumHeader_(sh, mr - 2, 'По місяцях (речей і собівартість)');
-  sh.getRange(mr - 1, 1, 1, 6).setValues([['Місяць'].concat(BOT_TYPES).concat(['Усього речей', 'Собівартість'])]).setFontWeight('bold');
+  bot_sumHeader_(sh, mr - 2, 'По місяцях: речі, собівартість і покриття оплатами (🟢 покрито · 🟡 недоплата · 🔴 велика різниця)');
+  sh.getRange(mr - 1, 1, 1, 9).setValues([['Місяць'].concat(BOT_TYPES).concat(['Усього речей', 'Собівартість', 'Оплачено в місяці', 'Різниця', 'Покриття собівартості'])]).setFontWeight('bold');
   for (var k = 0; k < 12; k++) {
     var r = mr + k;
     sh.getRange(r, 1).setFormula(bot_fx('=EDATE($H$1,' + (k - 11) + ')')).setNumberFormat('mmmm yyyy');
@@ -4679,10 +4706,22 @@ function bot_buildSummary() {
     });
     sh.getRange(r, 5).setFormula(bot_fx('=' + monthCount('', '$A' + r, 'EDATE($A' + r + ',1)')));
     sh.getRange(r, 6).setFormula(bot_fx('=' + monthSum('', '$A' + r, 'EDATE($A' + r + ',1)'))).setNumberFormat(money);
+    // місяці, що закінчились до дати початкового залишку, не показуємо (їх дані — в залишку)
+    var skip = 'EDATE($A' + r + ',1)<=$H$5+1';
+    sh.getRange(r, 7).setFormula(bot_fx('=IF(AND($H$5>0,' + skip + '),"",SUMIFS(' + P('sum') + ',' + P('date') + ',">="&$A' + r + ',' + P('date') + ',"<"&EDATE($A' + r + ',1)))')).setNumberFormat(money);
+    sh.getRange(r, 8).setFormula(bot_fx('=IF(OR($G' + r + '="",$F' + r + '<=0),"",$G' + r + '-$F' + r + ')')).setNumberFormat('+#,##0" грн";-#,##0" грн"');
+    sh.getRange(r, 9).setFormula(bot_fx('=IF($G' + r + '="","",' + covStatus('$F' + r, '$G' + r) + ')'));
   }
 
   sh.setColumnWidth(1, 330);
   [2, 3, 4, 5, 6].forEach(function (c) { sh.setColumnWidth(c, 150); });
+  sh.setColumnWidth(7, 150); sh.setColumnWidth(8, 130); sh.setColumnWidth(9, 190);
+  // кольори покриття: зелений / жовтий / червоний
+  var covRanges = [sh.getRange('D18'), sh.getRange(mr, 9, 12, 1)];
+  var rules = [['🟢', '#d9ead3', '#274e13'], ['🟡', '#fff2cc', '#7f6000'], ['🔴', '#f4cccc', '#990000']].map(function (c) {
+    return SpreadsheetApp.newConditionalFormatRule().whenTextContains(c[0]).setBackground(c[1]).setFontColor(c[2]).setRanges(covRanges).build();
+  });
+  sh.setConditionalFormatRules(rules);
   sh.setFrozenRows(0);
   try {
     sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(function (p) { p.remove(); });
@@ -4696,7 +4735,7 @@ function bot_buildSummary() {
 }
 
 function bot_sumHeader_(sh, row, title) {
-  sh.getRange(row, 1, 1, 6).setBackground('#d9e2f3').setFontWeight('bold');
+  sh.getRange(row, 1, 1, 9).setBackground('#d9e2f3').setFontWeight('bold');
   sh.getRange(row, 1).setValue(title);
 }
 
