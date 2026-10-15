@@ -46,7 +46,13 @@ function bot_regSelect(ttnRows, orders, fromNo) {
 
 /** Посилання на друк маркування 100×100 (PDF). Ключ API — лише тут, на боці скрипта; у Telegram і логи не потрапляє. */
 function bot_regPrintUrl(ttns, key) {
-  return 'https://my.novaposhta.ua/orders/printMarking100x100/' + ttns.map(function (t) { return 'orders[]/' + t; }).join('/') + '/type/pdf/apiKey/' + key;
+  // UrlFetchApp відхиляє «[]» у посиланні («Недійсний аргумент») — кодуємо як %5B%5D (сервер НП розкодовує)
+  return 'https://my.novaposhta.ua/orders/printMarking100x100/' + ttns.map(function (t) { return 'orders%5B%5D/' + t; }).join('/') + '/type/pdf/apiKey/' + key;
+}
+
+/** Запасне посилання: усі номери одним сегментом через кому. */
+function bot_regPrintUrlAlt(ttns, key) {
+  return 'https://my.novaposhta.ua/orders/printMarking100x100/orders/' + ttns.join(',') + '/type/pdf/apiKey/' + key;
 }
 
 // ---------- аркуш «Реєстри» ----------
@@ -99,12 +105,18 @@ function bot_npCreateScanSheet_(refs) {
 
 function bot_npDownloadMarking_(ttns) {
   var key = bot_prop(BOT_PROP.NP_KEY);
-  var resp = UrlFetchApp.fetch(bot_regPrintUrl(ttns, key), { muteHttpExceptions: true });
-  if (resp.getResponseCode() !== 200) throw new Error('НП не віддала PDF маркування (HTTP ' + resp.getResponseCode() + ')');
-  var blob = resp.getBlob();
-  var head = String.fromCharCode.apply(null, blob.getBytes().slice(0, 4).map(function (b) { return b & 255; }));
-  if (head !== '%PDF') throw new Error('НП віддала не PDF (імовірно, помилка ключа або ТТН)');
-  return blob;
+  var urls = [bot_regPrintUrl(ttns, key), bot_regPrintUrlAlt(ttns, key)], lastErr = '';
+  for (var i = 0; i < urls.length; i++) {
+    try {
+      var resp = UrlFetchApp.fetch(urls[i], { muteHttpExceptions: true });
+      if (resp.getResponseCode() !== 200) { lastErr = 'HTTP ' + resp.getResponseCode(); continue; }
+      var blob = resp.getBlob();
+      var head = String.fromCharCode.apply(null, blob.getBytes().slice(0, 4).map(function (b) { return b & 255; }));
+      if (head === '%PDF') return blob;
+      lastErr = 'відповідь не PDF (імовірно, помилка ключа або ТТН)';
+    } catch (e) { lastErr = bot_scrub(String(e.message)).slice(0, 120); }
+  }
+  throw new Error('Не вдалося завантажити PDF маркування з НП: ' + lastErr + '. Реєстр у НП уже створено — після виправлення просто повторіть /registry: бот надішле PDF, а другий реєстр не створить.');
 }
 
 // ---------- запуск ----------

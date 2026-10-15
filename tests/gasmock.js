@@ -120,6 +120,7 @@ function newEnv(opts) {
           default: return respond({ ok: true, result: true });
         }
       }
+      if (/\[|\]/.test(String(url))) throw new Error('Недійсний аргумент: ' + url);                      // UrlFetchApp не приймає «[]» у посиланні
       if (/my\.novaposhta\.ua\/orders\/printMarking100x100/.test(url)) { np.printUrls = (np.printUrls || []).concat(url); const pdf = { name: 'm.pdf', bytes: Buffer.from(np.printBad ? '<html>' : '%PDF-1.4 test') }; return { getResponseCode: () => 200, getBlob: () => mkBlob(pdf) }; }
       if (/novaposhta/.test(url)) { np.calls.push(payload); if (np.fail) return respond({ success: false, data: [], errors: [np.fail] }); return respond({ success: true, data: np.handler(payload), errors: [] }); }
       throw new Error('Невідомий URL у моці: ' + url);

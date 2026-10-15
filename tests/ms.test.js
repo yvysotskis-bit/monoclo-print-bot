@@ -175,7 +175,7 @@ test('D: о 10:00 — реєстр у НП, PDF 100×100 у гілку «Реє�
   assert.equal(String(docs[0].chat_id), String(GROUP)); assert.equal(docs[0].message_thread_id, String(REP_T));
   assert.equal(docs[0].document.name, '15089-15093.pdf');
   assert.equal(docs[0].caption, 'Реєстр №105-0001 · 2 ТТН · 07.10');
-  assert.ok(env.np.printUrls[0].includes('printMarking100x100/orders[]/' + T1 + '/orders[]/' + T2 + '/type/pdf/apiKey/SECRETKEY'));
+  assert.ok(env.np.printUrls[0].includes('printMarking100x100/orders%5B%5D/' + T1 + '/orders%5B%5D/' + T2 + '/type/pdf/apiKey/SECRETKEY'));
   assert.ok(!JSON.stringify(env.tg.calls).includes('SECRETKEY'));        // ключ НП не потрапляє в Telegram
   assert.ok(!ownerTexts(env).join('\n').includes('SECRETKEY'));
   assert.deepEqual([...ttnRows(env).map(r => r.registry)], ['105-0001', '105-0001']);
@@ -579,4 +579,15 @@ test('/registry у гілці «Реєстри» від дозволеної л�
   assert.ok(env.sentTo(OWNER).some(s => /Реєстр створено на запит/.test(s.text)));
   env.update(inThread('/registry', 555, REP_T)); env.poll();                              // одразу вдруге — пауза
   assert.equal(env.scans.length, 1);
+});
+
+test('PDF маркування: посилання без «[]» (UrlFetchApp), запасне посилання при збої; реєстр створюється один раз', () => {
+  const env = liveEnv(); const c = env.ctx;
+  assert.ok(!/[\[\]]/.test(c.bot_regPrintUrl([T1, T2], 'K')));
+  assert.equal(c.bot_regPrintUrlAlt([T1, T2], 'K'), `https://my.novaposhta.ua/orders/printMarking100x100/orders/${T1},${T2}/type/pdf/apiKey/K`);
+  env.update(groupMsg(MSG2)); env.poll();
+  env.update(privMsg('/registry now')); env.poll();
+  const q = env.lastSent();
+  env.update(cb(q.reply_markup.inline_keyboard[0][0].callback_data, q.message_id)); env.poll();
+  assert.equal(env.scans.length, 1); assert.equal(groupDocs(env).length, 1);
 });
