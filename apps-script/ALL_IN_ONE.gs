@@ -3494,9 +3494,9 @@ function bot_npHas_(v) { return v !== undefined && v !== null && v !== '' && !(A
 
 function bot_npIsZero_(v) { return typeof v !== 'object' && /^\s*0+([.,]0+)?\s*$/.test(String(v)); }
 
-/** Порівняння тексту без різниці в пробілах по краях / подвійних пробілах. */
+/** Порівняння тексту без різниці в пробілах і регістрі (НП сама робить першу літеру великою: «тест» → «Тест»). */
 function bot_npSameText_(a, b) {
-  var n = function (x) { return String(x === undefined || x === null ? '' : x).replace(/\s+/g, ' ').trim(); };
+  var n = function (x) { return String(x === undefined || x === null ? '' : x).replace(/\s+/g, ' ').trim().toLowerCase(); };
   return n(a) === n(b);
 }
 

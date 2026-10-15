@@ -439,3 +439,12 @@ test('C: НП віддає старий текст одразу після за�
   const res = env2.ctx.bot_npWriteDesc(TEST, 'тест 123');
   assert.equal(res.state, 'error'); assert.match(res.error, /Вввв/); assert.match(res.error, /ІНШИЙ номер ТТН/);
 });
+
+test('C: НП робить першу літеру великою («тест 123» → «Тест 123») — це не помилка', () => {
+  const env = fresh(); env.docs[TEST] = npDoc(TEST);
+  const base = env.np.handler;
+  env.np.handler = (p) => { const r = base(p); if (p.calledMethod === 'update') { const d = env.docs[TEST]; d.AdditionalInformation = d.AdditionalInformation.charAt(0).toUpperCase() + d.AdditionalInformation.slice(1); } return r; };
+  assert.equal(env.ctx.bot_npWriteDesc(TEST, 'тест 123').state, 'written');
+  assert.equal(env.docs[TEST].AdditionalInformation, 'Тест 123');
+  assert.equal(env.ctx.bot_npWriteDesc(TEST, 'тест 123').state, 'same');          // повтор — нічого не робимо
+});
