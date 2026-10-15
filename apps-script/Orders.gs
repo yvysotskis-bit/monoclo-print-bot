@@ -38,14 +38,14 @@ function bot_buildOrderFields_(p, orderDate, priceRows, status) {
   else if (p.type) {
     var price = bot_priceFor(priceRows, p.type, orderDate, new Date());
     if (price === null) { issues.push('«' + p.type + '» немає в прайсі'); yellow.push('cost'); }
-    else cost = price * (p.qty || 1);
+    else cost = price;
   } else {
     yellow.push('cost');
   }
   return {
     fields: {
       no: p.no, date: orderDate, print: p.print, type: p.type, color: p.color, size: p.size, placement: p.placement,
-      prints: p.prints, qty: p.qty || 1, ttn: p.ttn, cost: cost
+      prints: p.prints, colorCode: p.colorCode || '', ttn: p.ttn, cost: cost
     },
     issues: issues, yellow: yellow
   };

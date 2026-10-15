@@ -72,11 +72,11 @@ test('Назва принта: прибрати «Принт», Title Case, аб
   assert.equal(c('Принт McLaren 1963 (W) + Lando-Logo'), 'McLaren 1963 (W)+Lando-Logo');
 });
 
-test('Розбір: кількість x/х, БЕЗ ФЛІСУ з емодзі, ДВА ПРИНТА, кепка, кількість у вартості не плутається з XL', () => {
+test('Розбір: код кольору x/х (х1 чорний, х3 графітовий, х4 сірий), БЕЗ ФЛІСУ з емодзі, ДВА ПРИНТА, кепка, кількість у вартості не плутається з XL', () => {
   const l = B.bot_parseOrderMessage(`15091. Принт george halftone\nХуді х3 ❗️БЕЗ ФЛІСУ\nXL\nПринт позаду\n${TTN}`);
-  assert.equal(l[0].qty, 3); assert.equal(l[0].type, 'Худі не утеплене'); assert.equal(l[0].size, 'XL');
+  assert.equal(l[0].colorCode, 3); assert.equal(l[0].color, 'Графітовий'); assert.equal(l[0].type, 'Худі не утеплене'); assert.equal(l[0].size, 'XL');
   assert.equal(l[0].issues.length, 0);
-  assert.equal(B.bot_parseOrderMessage(`15001. Принт A\nФутболка чорна\n2XL\n${TTN}`)[0].qty, 1);
+  assert.equal(B.bot_parseOrderMessage(`15001. Принт A\nФутболка чорна\n2XL\n${TTN}`)[0].colorCode, 0);
   const cap = B.bot_parseOrderMessage(`15100. Кепка Ferrari - 0132\n${TTN}`)[0];
   assert.equal(cap.type, 'Кепка'); assert.equal(cap.issues.length, 0);
 });
@@ -86,5 +86,13 @@ test('Приклад з розділу 2 розбирається без зау�
   const l = B.bot_parseOrderMessage(msg);
   assert.equal(l.length, 4);
   l.forEach(p => { assert.deepEqual(JSON.parse(JSON.stringify(p.issues)), []); assert.equal(p.ttn, '20451556067718'); });
-  assert.equal(l[3].qty, 3);
+  assert.equal(l[3].colorCode, 3);
+});
+
+test('х1/х3/х4 — код кольору худі (чорний/графітовий/сірий); х2 не вгадуємо; собівартість не множиться', () => {
+  const c = (x) => B.bot_parseOrderMessage(`15600. Принт A\nХуді ${x} БЕЗ ФЛІСУ\nM\n${TTN}`)[0];
+  assert.equal(c('x1').color, 'Чорний'); assert.equal(c('х3').color, 'Графітовий'); assert.equal(c('x4').color, 'Сірий');
+  assert.equal(c('x2').color, ''); assert.equal(c('x2').colorCode, 2); assert.deepEqual(JSON.parse(JSON.stringify(c('x2').issues)), []);
+  const row = B.bot_buildOrderFields_(c('х3'), new Date(), [{ type: 'Худі не утеплене', price: 740, from: null }], 'В роботі');
+  assert.equal(row.fields.cost, 740);
 });

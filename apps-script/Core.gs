@@ -184,7 +184,8 @@ function bot_normColor(text) {
   var t = bot_deLatin_(bot_trim(text).toLowerCase());
   if (/чорн/.test(t)) return 'Чорний';
   if (/біл/.test(t)) return 'Білий';
-  if (/сір|графіт/.test(t)) return 'Сірий';
+  if (/графіт/.test(t)) return 'Графітовий';
+  if (/сір/.test(t)) return 'Сірий';
   return '';
 }
 
@@ -230,7 +231,7 @@ function bot_countPrints(printText) {
 // Розбір підпису замовлення з групи (розділ 4.2)
 // =====================================================================
 
-/** Кількість: «x3» / «х3» / «×3» окремим словом (не «XL», не «2XL»). */
+/** Код кольору: «x3» / «х3» / «×3» окремим словом (не «XL», не «2XL»). */
 var BOT_QTY_RE_ = /(^|\s)[xXхХ×]\s*(\d{1,2})(?=\s|$|[^\dA-Za-zА-Яа-яІіЇїЄєҐґ])/;
 
 var BOT_PREFIX_RE_ = /^[\s❗‼⚠️!]*(терміново[\s:!—\-]*)?/i;
@@ -255,13 +256,13 @@ function bot_parseOrderSegment_(lines) {
   var st = bot_orderStart_(lines[0]);
   var res = {
     ok: true, no: st.no, print: st.rest, prints: bot_countPrints(st.rest), type: '', typeAmbiguous: false, color: '',
-    size: '', placement: '', ttn: '', issues: [], ttnShared: false, qty: 1, urgent: false
+    size: '', placement: '', ttn: '', issues: [], ttnShared: false, colorCode: 0, urgent: false
   };
   var badTtn = '', extras = [];
   for (var i = 1; i < lines.length; i++) {
     var line = lines[i];
-    var qm = line.match(BOT_QTY_RE_);                    // «x3», «х3» (латиниця й кирилиця) — кількість; x1 нічого не змінює
-    if (qm) { res.qty = Math.max(1, parseInt(qm[2], 10)); line = bot_trim(line.replace(BOT_QTY_RE_, '$1')); if (!line) continue; }
+    var qm = line.match(BOT_QTY_RE_);                    // «x3», «х3» (латиниця й кирилиця) — КОД КОЛЬОРУ речі (не кількість!)
+    if (qm) { res.colorCode = parseInt(qm[2], 10); line = bot_trim(line.replace(BOT_QTY_RE_, '$1')); if (!line) continue; }
     if (/(^|[^а-яіїєґ])два\s+принт/i.test(line)) { res.prints = 2; continue; }   // окремий рядок «ДВА ПРИНТА»
     var digits = line.replace(/[\s ]/g, '').replace(/^(ттн|тт|№)[:\-]?/i, '');
 
@@ -292,6 +293,7 @@ function bot_parseOrderSegment_(lines) {
     res.issues.push({ field: 'type', text: res.typeAmbiguous ? 'Худі: не вказано «з флісом» чи «без флісу»' : 'не вказано вид речі (футболка / худі)' });
   }
   var noSz = BOT_NO_SIZE_COLOR_TYPES.indexOf(res.type) >= 0;
+  if (!res.color && res.colorCode && BOT_COLOR_CODES[res.colorCode]) res.color = BOT_COLOR_CODES[res.colorCode];   // х1 чорний, х3 графітовий, х4 сірий
   // колір обов'язковий лише для футболки: у повідомленнях склад не пише колір худі
   if (!res.color && !noSz && res.type !== 'Худі фліс' && res.type !== 'Худі не утеплене' && !res.typeAmbiguous) res.issues.push({ field: 'color', text: 'не вказано колір' });
   if (!res.size && !noSz) res.issues.push({ field: 'size', text: 'не вказано розмір' });

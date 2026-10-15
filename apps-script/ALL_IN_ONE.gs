@@ -35,7 +35,7 @@ var BOT_ORDER_COLS = [
   ['size', 'Розмір'],
   ['placement', 'Розміщення принту'],
   ['prints', 'Принтів'],
-  ['qty', 'Кількість'],
+  ['colorCode', 'Код кольору (хN)'],
   ['ttn', 'ТТН'],
   ['ttnDate', 'Дата створення ТТН'],
   ['stage', 'Етап доставки'],
@@ -132,7 +132,9 @@ var BOT_PRICE_COLS = ['Тип речі', 'Собівартість, грн', 'Д
 
 // ---- Довідники (значення списків) ----
 var BOT_TYPES = ['Футболка', 'Худі фліс', 'Худі не утеплене'];   // «Стікерпак» і «Кепка» додаються з Прайсу
-var BOT_COLORS = ['Чорний', 'Білий', 'Сірий'];
+var BOT_COLORS = ['Чорний', 'Білий', 'Сірий', 'Графітовий'];
+// Код кольору в повідомленні («x1», «х3»…): на цьому друці це колір худі. х2 — значення ще не підтверджене власником.
+var BOT_COLOR_CODES = { 1: 'Чорний', 3: 'Графітовий', 4: 'Сірий' };
 var BOT_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL'];
 var BOT_PLACEMENTS = ['Позаду', 'Спереду', 'Спереду і позаду', 'Як на візуалі'];
 var BOT_STAGES = ['Немає ТТН', 'Не передана', 'В дорозі', 'На відділенні', 'Отримано', 'Відмова', 'Повернення'];
@@ -393,7 +395,8 @@ function bot_normColor(text) {
   var t = bot_deLatin_(bot_trim(text).toLowerCase());
   if (/чорн/.test(t)) return 'Чорний';
   if (/біл/.test(t)) return 'Білий';
-  if (/сір|графіт/.test(t)) return 'Сірий';
+  if (/графіт/.test(t)) return 'Графітовий';
+  if (/сір/.test(t)) return 'Сірий';
   return '';
 }
 
@@ -439,7 +442,7 @@ function bot_countPrints(printText) {
 // Розбір підпису замовлення з групи (розділ 4.2)
 // =====================================================================
 
-/** Кількість: «x3» / «х3» / «×3» окремим словом (не «XL», не «2XL»). */
+/** Код кольору: «x3» / «х3» / «×3» окремим словом (не «XL», не «2XL»). */
 var BOT_QTY_RE_ = /(^|\s)[xXхХ×]\s*(\d{1,2})(?=\s|$|[^\dA-Za-zА-Яа-яІіЇїЄєҐґ])/;
 
 var BOT_PREFIX_RE_ = /^[\s❗‼⚠️!]*(терміново[\s:!—\-]*)?/i;
@@ -464,13 +467,13 @@ function bot_parseOrderSegment_(lines) {
   var st = bot_orderStart_(lines[0]);
   var res = {
     ok: true, no: st.no, print: st.rest, prints: bot_countPrints(st.rest), type: '', typeAmbiguous: false, color: '',
-    size: '', placement: '', ttn: '', issues: [], ttnShared: false, qty: 1, urgent: false
+    size: '', placement: '', ttn: '', issues: [], ttnShared: false, colorCode: 0, urgent: false
   };
   var badTtn = '', extras = [];
   for (var i = 1; i < lines.length; i++) {
     var line = lines[i];
-    var qm = line.match(BOT_QTY_RE_);                    // «x3», «х3» (латиниця й кирилиця) — кількість; x1 нічого не змінює
-    if (qm) { res.qty = Math.max(1, parseInt(qm[2], 10)); line = bot_trim(line.replace(BOT_QTY_RE_, '$1')); if (!line) continue; }
+    var qm = line.match(BOT_QTY_RE_);                    // «x3», «х3» (латиниця й кирилиця) — КОД КОЛЬОРУ речі (не кількість!)
+    if (qm) { res.colorCode = parseInt(qm[2], 10); line = bot_trim(line.replace(BOT_QTY_RE_, '$1')); if (!line) continue; }
     if (/(^|[^а-яіїєґ])два\s+принт/i.test(line)) { res.prints = 2; continue; }   // окремий рядок «ДВА ПРИНТА»
     var digits = line.replace(/[\s ]/g, '').replace(/^(ттн|тт|№)[:\-]?/i, '');
 
@@ -501,6 +504,7 @@ function bot_parseOrderSegment_(lines) {
     res.issues.push({ field: 'type', text: res.typeAmbiguous ? 'Худі: не вказано «з флісом» чи «без флісу»' : 'не вказано вид речі (футболка / худі)' });
   }
   var noSz = BOT_NO_SIZE_COLOR_TYPES.indexOf(res.type) >= 0;
+  if (!res.color && res.colorCode && BOT_COLOR_CODES[res.colorCode]) res.color = BOT_COLOR_CODES[res.colorCode];   // х1 чорний, х3 графітовий, х4 сірий
   // колір обов'язковий лише для футболки: у повідомленнях склад не пише колір худі
   if (!res.color && !noSz && res.type !== 'Худі фліс' && res.type !== 'Худі не утеплене' && !res.typeAmbiguous) res.issues.push({ field: 'color', text: 'не вказано колір' });
   if (!res.size && !noSz) res.issues.push({ field: 'size', text: 'не вказано розмір' });
@@ -901,7 +905,7 @@ function bot_cellDate_(v) { return bot_isDate(v) ? v : null; }
 function bot_ordersSheet() { return bot_sheet(BOT_SHEETS.orders); }
 
 function bot_ordersMap(sheet) {
-  return bot_headerMap(sheet || bot_ordersSheet(), BOT_ORDER_COLS, ['arrived', 'qty']);
+  return bot_headerMap(sheet || bot_ordersSheet(), BOT_ORDER_COLS, ['arrived', 'colorCode']);
 }
 
 function bot_orderFromRow_(r, map, rowNum) {
@@ -912,7 +916,7 @@ function bot_orderFromRow_(r, map, rowNum) {
     no: (no === '' || no === null) ? '' : (isNaN(Number(no)) ? bot_cellStr_(no) : Number(no)),
     date: bot_cellDate_(g('date')), print: bot_cellStr_(g('print')), type: bot_cellStr_(g('type')),
     color: bot_cellStr_(g('color')), size: bot_cellStr_(g('size')), placement: bot_cellStr_(g('placement')),
-    prints: Number(g('prints')) || 1, qty: Number(g('qty')) || 1, ttn: bot_normTtn(g('ttn')), ttnDate: bot_cellDate_(g('ttnDate')),
+    prints: Number(g('prints')) || 1, colorCode: Number(g('colorCode')) || 0, ttn: bot_normTtn(g('ttn')), ttnDate: bot_cellDate_(g('ttnDate')),
     stage: bot_cellStr_(g('stage')), npStatus: bot_cellStr_(g('npStatus')),
     cost: Number(g('cost')) || 0, status: bot_cellStr_(g('status')) || 'В роботі',
     paid: bot_cellStr_(g('paid')) || 'Не оплачено', paidDate: bot_cellDate_(g('paidDate')) || '',
@@ -1624,14 +1628,14 @@ function bot_buildOrderFields_(p, orderDate, priceRows, status) {
   else if (p.type) {
     var price = bot_priceFor(priceRows, p.type, orderDate, new Date());
     if (price === null) { issues.push('«' + p.type + '» немає в прайсі'); yellow.push('cost'); }
-    else cost = price * (p.qty || 1);
+    else cost = price;
   } else {
     yellow.push('cost');
   }
   return {
     fields: {
       no: p.no, date: orderDate, print: p.print, type: p.type, color: p.color, size: p.size, placement: p.placement,
-      prints: p.prints, qty: p.qty || 1, ttn: p.ttn, cost: cost
+      prints: p.prints, colorCode: p.colorCode || '', ttn: p.ttn, cost: cost
     },
     issues: issues, yellow: yellow
   };
@@ -1878,14 +1882,13 @@ function bot_descItems(list) {
     if (!kind || kind === 'other') kind = p.typeAmbiguous ? 'hoodie' : 'other';
     return {
       no: p.no, kind: kind, raw: p.print || '', name: bot_cleanPrintName(p.print, kind), color: p.color || '', size: p.size || '',
-      qty: p.qty || 1, noFleece: p.type === 'Худі не утеплене', placement: p.placement || '', two: (p.prints || 1) >= 2,
+      code: p.colorCode || 0, noFleece: p.type === 'Худі не утеплене', placement: p.placement || '', two: (p.prints || 1) >= 2,
       urgent: !!p.urgent
     };
   });
 }
 
 var BOT_COLOR_FEM_ = { 'Чорний': 'чорна', 'Білий': 'біла', 'Сірий': 'сіра' };
-var BOT_COLOR_NEUT_ = { 'Чорний': 'чорне', 'Білий': 'біле', 'Сірий': 'сіре' };
 var BOT_COLOR_SHORT_ = { 'Чорний': 'чор', 'Білий': 'біла', 'Сірий': 'сіра' };
 
 function bot_nameForLevel_(it, o) {
@@ -1912,9 +1915,9 @@ function bot_renderItem_(it, o) {
     if (o.teeShort) { if (it.color) parts.push(BOT_COLOR_SHORT_[it.color] || ''); }
     else parts.push('футболка' + (it.color ? ' ' + BOT_COLOR_FEM_[it.color] : ''));
   } else {
-    parts.push('худі' + (it.color && !o.teeShort ? ' ' + BOT_COLOR_NEUT_[it.color] : ''));
+    parts.push('худі');                                  // колір худі несе код хN
   }
-  if (it.qty > 1) parts.push('х' + it.qty);
+  if (it.code > 1) parts.push('х' + it.code);          // код кольору худі: х2/х3/х4 (х1 = чорний, не пишемо)
   if (it.kind === 'hoodie' && it.noFleece) parts.push('БЕЗ ФЛІСУ');
   if (it.size) parts.push(it.size);
   var s = parts.filter(Boolean).join(' ');
@@ -1959,7 +1962,7 @@ function bot_overflowTexts_(items) {
     else if (it.kind === 'cap') t = 'кепка';
     else t = '';
     if (full) {
-      if (it.qty > 1) t += ' х' + it.qty;
+      if (it.code > 1) t += ' х' + it.code;
       if (it.kind === 'hoodie' && it.noFleece) t += ' БЕЗ ФЛІСУ';
       if (it.size) t += ' ' + it.size;
     }

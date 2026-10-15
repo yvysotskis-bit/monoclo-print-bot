@@ -52,14 +52,13 @@ function bot_descItems(list) {
     if (!kind || kind === 'other') kind = p.typeAmbiguous ? 'hoodie' : 'other';
     return {
       no: p.no, kind: kind, raw: p.print || '', name: bot_cleanPrintName(p.print, kind), color: p.color || '', size: p.size || '',
-      qty: p.qty || 1, noFleece: p.type === 'Худі не утеплене', placement: p.placement || '', two: (p.prints || 1) >= 2,
+      code: p.colorCode || 0, noFleece: p.type === 'Худі не утеплене', placement: p.placement || '', two: (p.prints || 1) >= 2,
       urgent: !!p.urgent
     };
   });
 }
 
 var BOT_COLOR_FEM_ = { 'Чорний': 'чорна', 'Білий': 'біла', 'Сірий': 'сіра' };
-var BOT_COLOR_NEUT_ = { 'Чорний': 'чорне', 'Білий': 'біле', 'Сірий': 'сіре' };
 var BOT_COLOR_SHORT_ = { 'Чорний': 'чор', 'Білий': 'біла', 'Сірий': 'сіра' };
 
 function bot_nameForLevel_(it, o) {
@@ -86,9 +85,9 @@ function bot_renderItem_(it, o) {
     if (o.teeShort) { if (it.color) parts.push(BOT_COLOR_SHORT_[it.color] || ''); }
     else parts.push('футболка' + (it.color ? ' ' + BOT_COLOR_FEM_[it.color] : ''));
   } else {
-    parts.push('худі' + (it.color && !o.teeShort ? ' ' + BOT_COLOR_NEUT_[it.color] : ''));
+    parts.push('худі');                                  // колір худі несе код хN
   }
-  if (it.qty > 1) parts.push('х' + it.qty);
+  if (it.code > 1) parts.push('х' + it.code);          // код кольору худі: х2/х3/х4 (х1 = чорний, не пишемо)
   if (it.kind === 'hoodie' && it.noFleece) parts.push('БЕЗ ФЛІСУ');
   if (it.size) parts.push(it.size);
   var s = parts.filter(Boolean).join(' ');
@@ -133,7 +132,7 @@ function bot_overflowTexts_(items) {
     else if (it.kind === 'cap') t = 'кепка';
     else t = '';
     if (full) {
-      if (it.qty > 1) t += ' х' + it.qty;
+      if (it.code > 1) t += ' х' + it.code;
       if (it.kind === 'hoodie' && it.noFleece) t += ' БЕЗ ФЛІСУ';
       if (it.size) t += ' ' + it.size;
     }
