@@ -1497,6 +1497,7 @@ function bot_helpText() {
     '• /month — місячний звіт (/month 2026-08 — за вказаний місяць)\n' +
     '• /desc &lt;ТТН&gt; — опис ТТН і його статус\n' +
     '• /setdesc &lt;ТТН&gt; &lt;текст&gt; — свій текст опису (до 100 символів; «-» — повернути автоматичний)\n' +
+    '• /backfill — створити описи для замовлень із таблиці (імпорт), яких ще немає в «ТТН»\n' +
     '• /registry — реєстр зараз; /registry preview — що ввійде\n' +
     '• /nptest &lt;ТТН&gt; &lt;текст&gt; — перевірка запису на ТЕСТОВІЙ ТТН; /npdoc &lt;ТТН&gt; — що віддає НП\n' +
     '• /live — бойовий режим (запис у НП); /preview — режим перевірки\n' +
@@ -1518,6 +1519,7 @@ function bot_onCommand(msg, c) {
     case 'report': return bot_cmdReport(chatId);
     case 'month': return bot_cmdMonth(chatId, c.arg);
     case 'desc': return bot_cmdDesc(chatId, c.arg);
+    case 'backfill': return bot_cmdBackfill(chatId);
     case 'setdesc': return bot_cmdSetDesc(chatId, c.arg);
     case 'registry': return bot_cmdRegistry(chatId, c.arg);
     case 'live': return bot_cmdLive(chatId);
@@ -3652,6 +3654,58 @@ function bot_cmdSetDesc(chatId, arg) {
   bot_send(chatId, '✏️ Записав у таблицю: <i>' + bot_esc(text) + '</i> (' + n + ' симв.). ' + (bot_npLive() ? 'Запишу в НП за хвилину.' : 'Режим перевірки — покажу в підсумку.'));
 }
 
+// ---------- /backfill: ТТН для замовлень, які вже є в таблиці (імпорт з експорту Telegram) ----------
+
+var BOT_CODE_OF_COLOR_ = { 'Чорний': 1, 'Білий': 2, 'Графітовий': 3, 'Сірий': 4 };
+
+/** Рядок «Замовлення» → вигляд розібраного замовлення для Shorten.gs (оригінального тексту повідомлення в таблиці немає). */
+function bot_orderAsParsed_(o) {
+  var code = o.colorCode || 0;
+  if (!code && (o.type === 'Худі фліс' || o.type === 'Худі не утеплене')) code = BOT_CODE_OF_COLOR_[o.color] || 0;   // колір худі = код хN
+  return { no: o.no, print: o.print, type: o.type, typeAmbiguous: false, color: o.color, size: o.size, placement: o.placement, prints: o.prints || 1, colorCode: code, urgent: false, ttn: o.ttn };
+}
+
+/**
+ * Для замовлень з номером > DESC_FROM_ORDER, у яких є ТТН, а рядка в «ТТН» ще немає — створює рядки з описом (статус «Новий»).
+ * Далі діє звичайний потік: режим перевірки → ви затверджуєте → запис у НП → реєстр. Ідемпотентно.
+ * @return {added, ttns:[…], overflow:[…]}
+ */
+function bot_ttnBackfill() {
+  return bot_withLock(function () {
+    var fromNo = bot_descFromOrder(), limit = bot_descLimit();
+    var have = {}; bot_readTtnRows().forEach(function (r) { have[r.ttn] = true; });
+    var groups = {}, order = [];
+    bot_readOrders().forEach(function (o) {
+      if (!o.ttn || !bot_isTtn(o.ttn) || o.status === 'Скасовано' || !(Number(o.no) > 0)) return;
+      if (have[o.ttn]) return;
+      if (!groups[o.ttn]) { groups[o.ttn] = []; order.push(o.ttn); }
+      groups[o.ttn].push(o);
+    });
+    var added = [], overflow = [];
+    order.forEach(function (ttn) {
+      var g = groups[ttn].sort(function (a, b) { return a.no - b.no; });
+      if (!g.some(function (o) { return o.no > fromNo; })) return;
+      var parsed = g.map(bot_orderAsParsed_);
+      var d = bot_buildDescription(parsed, limit);
+      var nos = g.map(function (o) { return o.no; }).join(', ');
+      var first = g.filter(function (o) { return o.msgId; })[0];
+      bot_ttnAppend({ ttn: ttn, orders: nos, original: '(відновлено з таблиці «Замовлення» — оригінального тексту повідомлення немає)', desc: d.text, len: d.len,
+        status: d.overflow ? 'Чекає рішення' : 'Новий', note: (d.overflow ? '⚠ не влізло в ' + limit + ' символів; ' : '') + 'ℹ з таблиці (імпорт)', msgId: first ? first.msgId : '' });
+      added.push(ttn);
+      if (d.overflow) overflow.push(ttn);
+    });
+    return { added: added.length, ttns: added, overflow: overflow };
+  });
+}
+
+function bot_cmdBackfill(chatId) {
+  var r = bot_ttnBackfill();
+  if (!r.added) return bot_send(chatId, 'Нових ТТН для опису немає: усі замовлення з номером більше ' + bot_descFromOrder() + ' уже в аркуші «ТТН».');
+  bot_send(chatId, '📥 Додав у аркуш «ТТН» <b>' + r.added + '</b> ТТН із замовлень №' + bot_descFromOrder() + '+ (з таблиці). ' +
+    (bot_npLive() ? 'Бойовий режим: опис запишу в НП за хвилину.' : 'Режим перевірки: за хвилину надішлю список «ТТН → опис» на перегляд.') +
+    (r.overflow.length ? '\n⚠️ Не влізли в ' + bot_descLimit() + ' символів: ' + r.overflow.length + ' (потрібен /setdesc).' : ''));
+}
+
 
 // ======================= Registry.gs =======================
 /**
@@ -5134,6 +5188,7 @@ var BOT_COMMANDS_ = [
   { command: 'desc', description: 'Опис ТТН: /desc ТТН' },
   { command: 'setdesc', description: 'Свій опис: /setdesc ТТН текст' },
   { command: 'registry', description: 'Реєстр зараз / preview' },
+  { command: 'backfill', description: 'Описи для замовлень з таблиці' },
   { command: 'live', description: 'Бойовий режим запису в НП' },
   { command: 'preview', description: 'Режим перевірки (нічого в НП)' }
 ];

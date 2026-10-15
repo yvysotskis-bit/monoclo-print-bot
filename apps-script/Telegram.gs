@@ -339,6 +339,7 @@ function bot_helpText() {
     '• /month — місячний звіт (/month 2026-08 — за вказаний місяць)\n' +
     '• /desc &lt;ТТН&gt; — опис ТТН і його статус\n' +
     '• /setdesc &lt;ТТН&gt; &lt;текст&gt; — свій текст опису (до 100 символів; «-» — повернути автоматичний)\n' +
+    '• /backfill — створити описи для замовлень із таблиці (імпорт), яких ще немає в «ТТН»\n' +
     '• /registry — реєстр зараз; /registry preview — що ввійде\n' +
     '• /nptest &lt;ТТН&gt; &lt;текст&gt; — перевірка запису на ТЕСТОВІЙ ТТН; /npdoc &lt;ТТН&gt; — що віддає НП\n' +
     '• /live — бойовий режим (запис у НП); /preview — режим перевірки\n' +
@@ -360,6 +361,7 @@ function bot_onCommand(msg, c) {
     case 'report': return bot_cmdReport(chatId);
     case 'month': return bot_cmdMonth(chatId, c.arg);
     case 'desc': return bot_cmdDesc(chatId, c.arg);
+    case 'backfill': return bot_cmdBackfill(chatId);
     case 'setdesc': return bot_cmdSetDesc(chatId, c.arg);
     case 'registry': return bot_cmdRegistry(chatId, c.arg);
     case 'live': return bot_cmdLive(chatId);

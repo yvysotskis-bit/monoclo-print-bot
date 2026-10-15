@@ -17,6 +17,7 @@ var BOT_COMMANDS_ = [
   { command: 'desc', description: 'Опис ТТН: /desc ТТН' },
   { command: 'setdesc', description: 'Свій опис: /setdesc ТТН текст' },
   { command: 'registry', description: 'Реєстр зараз / preview' },
+  { command: 'backfill', description: 'Описи для замовлень з таблиці' },
   { command: 'live', description: 'Бойовий режим запису в НП' },
   { command: 'preview', description: 'Режим перевірки (нічого в НП)' }
 ];

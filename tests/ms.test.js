@@ -263,3 +263,22 @@ test('Початковий залишок 2 227 020 (на 31.08, оплати п
   const m = c.bot_monthMetrics(orders, pays, 2026, 9, op);
   assert.equal(m.debtEnd, 2227020 + 740 + 420 - 100000);
 });
+
+test('/backfill: ТТН замовлень з таблиці (імпорт) → рядки «ТТН» з описом; колір худі → хN; ідемпотентно; далі режим перевірки', () => {
+  const env = fresh(); const c = env.ctx;
+  const mk = (no, ttn, type, color, size, extra) => c.bot_appendOrderRow(Object.assign({ no, date: c.bot_makeDate(2026, 10, 12), print: 'Принт No-Risk (W)', type, color, size, placement: 'Позаду', prints: 1, ttn, cost: 740, status: 'В роботі', paid: 'Не оплачено', msgId: String(900 + no) }, extra), []);
+  mk(15100, T1, 'Худі не утеплене', 'Графітовий', 'S');
+  mk(15101, T1, 'Футболка', 'Чорний', 'M', { print: 'Принт CV (W)' });
+  mk(15000, '20451555000000', 'Футболка', 'Чорний', 'M');                       // старе (≤15088) — не чіпаємо
+  mk(15102, T2, 'Футболка', 'Чорний', 'M', { status: 'Скасовано' });             // скасоване — пропуск
+  const r = c.bot_ttnBackfill();
+  assert.equal(r.added, 1);
+  const row = ttnRows(env)[0];
+  assert.equal(row.ttn, T1); assert.equal(row.orders, '15100, 15101'); assert.equal(row.status, 'Новий'); assert.equal(row.msgId, '16000');
+  assert.ok(row.desc.includes('15100') && row.desc.includes('х3') && row.desc.includes('БЕЗ ФЛІСУ') && row.desc.includes('15101'));
+  assert.ok(row.len <= 100);
+  assert.equal(c.bot_ttnBackfill().added, 0);                                      // повторно — нічого
+  env.poll();                                                                       // режим перевірки → власнику
+  assert.equal(ttnRows(env)[0].status, 'Перевірка');
+  assert.ok(ownerTexts(env).some(t => /Режим перевірки/.test(t) && t.includes(T1)));
+});

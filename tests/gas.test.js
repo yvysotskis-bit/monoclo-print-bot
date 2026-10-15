@@ -600,7 +600,7 @@ test('Увімкнення бота і «Перевірити, що все пр�
   const methods = env.tg.calls.map(c => c.method);
   assert.ok(methods.includes('deleteWebhook') && methods.includes('setMyCommands'));
   assert.deepEqual(env.tg.calls.find(c => c.method === 'getUpdates'), undefined);
-  assert.equal(env.tg.calls.find(c => c.method === 'setMyCommands').payload.commands.length, 16);
+  assert.equal(env.tg.calls.find(c => c.method === 'setMyCommands').payload.commands.length, 17);
   const checks = env.ctx.bot_healthChecks();
   assert.ok(checks.length >= 8 && checks.every(c => /^(🟢|🔴) /.test(c)));
   assert.ok(checks.some(c => /Токен Telegram введено/.test(c) && c.startsWith('🟢')));
