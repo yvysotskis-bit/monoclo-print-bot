@@ -33,15 +33,16 @@ function bot_cleanPrintName(raw, kind) {
   if (kind === 'sticker') s = s.replace(/^\s*стік[еи]р\s*-?\s*пак\s*/i, '');
   s = s.replace(/(^|[^а-яіїєґ])два\s+принт[а-яіїєґ]*/ig, '$1');
   s = s.replace(/\(\s*([wWbB])\s*\)/g, function (m, c) { return '(' + c.toUpperCase() + ')'; });
+  if (/^не\s*потрібен\.?$/i.test(s.trim())) return 'без принта';       // «Принт не потрібен»
   s = s.replace(/\s*\+\s*/g, '+').replace(/\s+/g, ' ').trim();
   return s.split(/([\s\-+])/).map(bot_capWord_).join('');
 }
 
 function bot_kindOf_(type) {
-  if (type === 'Футболка') return 'tee';
-  if (type === 'Худі фліс' || type === 'Худі не утеплене') return 'hoodie';
+  if (type === 'Футболка' || type === 'Футболка виварена') return 'tee';
+  if (type === 'Худі фліс' || type === 'Худі не утеплене' || type === 'Худі виварене') return 'hoodie';
   if (type === 'Стікерпак') return 'sticker';
-  if (type === 'Кепка') return 'cap';
+  if (type === 'Кепка' || type === 'Кепка виварена') return 'cap';
   return 'other';
 }
 
@@ -51,8 +52,8 @@ function bot_descItems(list) {
     var kind = bot_kindOf_(p.type);
     if (!kind || kind === 'other') kind = p.typeAmbiguous ? 'hoodie' : 'other';
     return {
-      no: p.no, kind: kind, raw: p.print || '', name: bot_cleanPrintName(p.print, kind), color: p.color || '', size: p.size || '',
-      code: p.colorCode || 0, noFleece: p.type === 'Худі не утеплене', placement: p.placement || '', two: (p.prints || 1) >= 2,
+      no: p.no, kind: kind, washed: /виварен/.test(p.type || ''), raw: p.print || '', name: bot_cleanPrintName(p.print, kind), color: p.color || '', size: p.size || '',
+      code: p.colorCode || (kind === 'hoodie' ? (BOT_CODE_OF_COLOR_[p.color] || 0) : 0), noFleece: p.type === 'Худі не утеплене', placement: p.placement || '', two: (p.prints || 1) >= 2,
       urgent: !!p.urgent
     };
   });
@@ -64,7 +65,7 @@ var BOT_COLOR_SHORT_ = { 'Чорний': 'чор', 'Білий': 'біла', 'С
 function bot_nameForLevel_(it, o) {
   var n = it.name;
   if (o.dropMarkers === 'all' || (o.dropMarkers === 'tee' && it.kind === 'tee')) n = n.replace(/\s*\([WB]\)/g, '');
-  if (o.glue) n = n.replace(/\s+(?!\()/g, '');                    // «Norris World Champion» → «NorrisWorldChampion»; «(W)» лишається окремо
+  if (o.glue && n !== 'без принта') n = n.replace(/\s+(?!\()/g, '');                    // «Norris World Champion» → «NorrisWorldChampion»; «(W)» лишається окремо
   return n.trim();
 }
 
@@ -82,10 +83,10 @@ function bot_renderItem_(it, o) {
   var nm = bot_nameForLevel_(it, o);
   if (nm) parts.push(nm);
   if (it.kind === 'tee') {
-    if (o.teeShort) { if (it.color) parts.push(BOT_COLOR_SHORT_[it.color] || ''); }
-    else parts.push('футболка' + (it.color ? ' ' + BOT_COLOR_FEM_[it.color] : ''));
+    if (o.teeShort) { if (it.color) parts.push((BOT_COLOR_SHORT_[it.color] || '') + (it.washed ? ' виварена' : '')); }
+    else parts.push('футболка' + (it.color ? ' ' + BOT_COLOR_FEM_[it.color] : '') + (it.washed ? ' виварена' : ''));
   } else {
-    parts.push('худі');                                  // колір худі несе код хN
+    parts.push('худі' + (it.washed ? ' виварене' : ''));   // колір худі несе код хN
   }
   if (it.code > 1) parts.push('х' + it.code);          // код кольору худі: х2/х3/х4 (х1 = чорний, не пишемо)
   if (it.kind === 'hoodie' && it.noFleece) parts.push('БЕЗ ФЛІСУ');
@@ -126,8 +127,8 @@ function bot_overflowTexts_(items) {
   var pre = bot_urgentPrefix_(items);
   var thing = function (it, full) {
     var t;
-    if (it.kind === 'tee') t = BOT_COLOR_SHORT_[it.color] || 'футб';
-    else if (it.kind === 'hoodie') t = 'худі';
+    if (it.kind === 'tee') t = (BOT_COLOR_SHORT_[it.color] || 'футб') + (it.washed ? ' виварена' : '');
+    else if (it.kind === 'hoodie') t = 'худі' + (it.washed ? ' виварене' : '');
     else if (it.kind === 'sticker') t = bot_nameForLevel_(it, { glue: true });
     else if (it.kind === 'cap') t = 'кепка';
     else t = '';

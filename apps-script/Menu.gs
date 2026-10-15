@@ -30,6 +30,7 @@ function onOpen() {
     .addSeparator()
     .addItem('Імпорт з попередньої версії', 'bot_menuImport')
     .addItem('Імпорт замовлень з експорту Telegram', 'bot_menuTgImport')
+    .addItem('«Виварене»: виправити тип і собівартість', 'bot_menuWashedFix')
     .addSeparator()
     .addItem('Режим запису в НП: показати / бойовий / перевірка', 'bot_menuMode')
     .addSeparator()

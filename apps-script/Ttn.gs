@@ -139,8 +139,6 @@ function bot_cmdSetDesc(chatId, arg) {
 
 // ---------- /backfill: ТТН для замовлень, які вже є в таблиці (імпорт з експорту Telegram) ----------
 
-var BOT_CODE_OF_COLOR_ = { 'Чорний': 1, 'Білий': 2, 'Графітовий': 3, 'Сірий': 4 };
-
 /** Рядок «Замовлення» → вигляд розібраного замовлення для Shorten.gs (оригінального тексту повідомлення в таблиці немає). */
 function bot_orderAsParsed_(o) {
   var code = o.colorCode || 0;

@@ -135,6 +135,7 @@ var BOT_TYPES = ['Футболка', 'Худі фліс', 'Худі не уте�
 var BOT_COLORS = ['Чорний', 'Білий', 'Сірий', 'Графітовий'];
 // Код кольору в повідомленні («x1», «х3»…): на цьому друці це колір худі.
 var BOT_COLOR_CODES = { 1: 'Чорний', 2: 'Білий', 3: 'Графітовий', 4: 'Сірий' };
+var BOT_CODE_OF_COLOR_ = { 'Чорний': 1, 'Білий': 2, 'Графітовий': 3, 'Сірий': 4 };
 var BOT_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL'];
 var BOT_PLACEMENTS = ['Позаду', 'Спереду', 'Спереду і позаду', 'Як на візуалі'];
 var BOT_STAGES = ['Немає ТТН', 'Не передана', 'В дорозі', 'На відділенні', 'Отримано', 'Відмова', 'Повернення'];
@@ -150,11 +151,17 @@ var BOT_DEFAULT_PRICES = [
   ['Худі фліс', 740, '01.01.2026', ''],
   ['Худі не утеплене', 740, '01.01.2026', ''],
   ['Стікерпак', 0, '01.01.2026', 'свій товар: постачаємо виробництву самі'],
-  ['Кепка', 0, '01.01.2026', 'ЗАПОВНІТЬ ціну кепки']
+  ['Кепка', 0, '01.01.2026', 'ЗАПОВНІТЬ ціну кепки'],
+  ['Худі виварене', 1490, '01.01.2026', 'будь-яке виварене — 1490'],
+  ['Футболка виварена', 1490, '01.01.2026', 'будь-яке виварене — 1490'],
+  ['Кепка виварена', 1490, '01.01.2026', 'будь-яке виварене — 1490'],
+  ['Виварене', 1490, '01.01.2026', 'виварене, вид речі не розпізнано — 1490']
 ];
 
 // Типи без розміру й кольору (їх відсутність не вважається проблемою замовлення)
-var BOT_NO_SIZE_COLOR_TYPES = ['Стікерпак', 'Кепка'];
+var BOT_NO_SIZE_COLOR_TYPES = ['Стікерпак', 'Кепка', 'Кепка виварена'];
+// «Виварене»: будь-яка виварена річ (худі, футболка, кепка) — окремий тип з ціною 1490 грн
+var BOT_WASHED_TYPES = ['Худі виварене', 'Футболка виварена', 'Кепка виварена', 'Виварене'];
 
 // ---- Налаштування (аркуш «Налаштування»): [параметр, значення за замовчуванням, пояснення] ----
 var BOT_DEFAULT_SETTINGS = [
@@ -503,13 +510,21 @@ function bot_parseOrderSegment_(lines) {
   if (!res.type && /^кепк/i.test(bot_deLatin_(res.print.toLowerCase()))) res.type = 'Кепка';                          // «15100. Кепка Ferrari - 0132»
   if (/^принти?\s*$/i.test(res.print) && extras.length) res.print = res.print + ' ' + extras.join(' / ');
 
+  // «виварене» (будь-яка річ) — окремий тип з власною ціною: Худі виварене / Футболка виварена / Кепка виварена / Виварене
+  var washedTxt = (res.print + ' ' + lines.join(' ')).toLowerCase();
+  if (/виварен/.test(washedTxt) && res.type !== 'Стікерпак') {
+    if (res.type === 'Кепка') res.type = 'Кепка виварена';
+    else if (res.type === 'Футболка') res.type = 'Футболка виварена';
+    else if (res.type === 'Худі фліс' || res.type === 'Худі не утеплене' || res.typeAmbiguous) { res.type = 'Худі виварене'; res.typeAmbiguous = false; }
+    else if (!res.type) res.type = 'Виварене';
+  }
   if (!res.type) {
     res.issues.push({ field: 'type', text: res.typeAmbiguous ? 'Худі: не вказано «з флісом» чи «без флісу»' : 'не вказано вид речі (футболка / худі)' });
   }
   var noSz = BOT_NO_SIZE_COLOR_TYPES.indexOf(res.type) >= 0;
   if (!res.color && res.colorCode && BOT_COLOR_CODES[res.colorCode]) res.color = BOT_COLOR_CODES[res.colorCode];   // х1 чорний, х3 графітовий, х4 сірий
   // колір обов'язковий лише для футболки: у повідомленнях склад не пише колір худі
-  if (!res.color && !noSz && res.type !== 'Худі фліс' && res.type !== 'Худі не утеплене' && !res.typeAmbiguous) res.issues.push({ field: 'color', text: 'не вказано колір' });
+  if (!res.color && !noSz && res.type !== 'Худі фліс' && res.type !== 'Худі не утеплене' && res.type !== 'Худі виварене' && !res.typeAmbiguous) res.issues.push({ field: 'color', text: 'не вказано колір' });
   if (!res.size && !noSz) res.issues.push({ field: 'size', text: 'не вказано розмір' });
   if (!res.ttn) {
     res.issues.push({ field: 'ttn', text: badTtn ? 'ТТН «' + badTtn + '» — не 14 цифр' : 'немає ТТН' });
@@ -1868,15 +1883,16 @@ function bot_cleanPrintName(raw, kind) {
   if (kind === 'sticker') s = s.replace(/^\s*стік[еи]р\s*-?\s*пак\s*/i, '');
   s = s.replace(/(^|[^а-яіїєґ])два\s+принт[а-яіїєґ]*/ig, '$1');
   s = s.replace(/\(\s*([wWbB])\s*\)/g, function (m, c) { return '(' + c.toUpperCase() + ')'; });
+  if (/^не\s*потрібен\.?$/i.test(s.trim())) return 'без принта';       // «Принт не потрібен»
   s = s.replace(/\s*\+\s*/g, '+').replace(/\s+/g, ' ').trim();
   return s.split(/([\s\-+])/).map(bot_capWord_).join('');
 }
 
 function bot_kindOf_(type) {
-  if (type === 'Футболка') return 'tee';
-  if (type === 'Худі фліс' || type === 'Худі не утеплене') return 'hoodie';
+  if (type === 'Футболка' || type === 'Футболка виварена') return 'tee';
+  if (type === 'Худі фліс' || type === 'Худі не утеплене' || type === 'Худі виварене') return 'hoodie';
   if (type === 'Стікерпак') return 'sticker';
-  if (type === 'Кепка') return 'cap';
+  if (type === 'Кепка' || type === 'Кепка виварена') return 'cap';
   return 'other';
 }
 
@@ -1886,8 +1902,8 @@ function bot_descItems(list) {
     var kind = bot_kindOf_(p.type);
     if (!kind || kind === 'other') kind = p.typeAmbiguous ? 'hoodie' : 'other';
     return {
-      no: p.no, kind: kind, raw: p.print || '', name: bot_cleanPrintName(p.print, kind), color: p.color || '', size: p.size || '',
-      code: p.colorCode || 0, noFleece: p.type === 'Худі не утеплене', placement: p.placement || '', two: (p.prints || 1) >= 2,
+      no: p.no, kind: kind, washed: /виварен/.test(p.type || ''), raw: p.print || '', name: bot_cleanPrintName(p.print, kind), color: p.color || '', size: p.size || '',
+      code: p.colorCode || (kind === 'hoodie' ? (BOT_CODE_OF_COLOR_[p.color] || 0) : 0), noFleece: p.type === 'Худі не утеплене', placement: p.placement || '', two: (p.prints || 1) >= 2,
       urgent: !!p.urgent
     };
   });
@@ -1899,7 +1915,7 @@ var BOT_COLOR_SHORT_ = { 'Чорний': 'чор', 'Білий': 'біла', 'С
 function bot_nameForLevel_(it, o) {
   var n = it.name;
   if (o.dropMarkers === 'all' || (o.dropMarkers === 'tee' && it.kind === 'tee')) n = n.replace(/\s*\([WB]\)/g, '');
-  if (o.glue) n = n.replace(/\s+(?!\()/g, '');                    // «Norris World Champion» → «NorrisWorldChampion»; «(W)» лишається окремо
+  if (o.glue && n !== 'без принта') n = n.replace(/\s+(?!\()/g, '');                    // «Norris World Champion» → «NorrisWorldChampion»; «(W)» лишається окремо
   return n.trim();
 }
 
@@ -1917,10 +1933,10 @@ function bot_renderItem_(it, o) {
   var nm = bot_nameForLevel_(it, o);
   if (nm) parts.push(nm);
   if (it.kind === 'tee') {
-    if (o.teeShort) { if (it.color) parts.push(BOT_COLOR_SHORT_[it.color] || ''); }
-    else parts.push('футболка' + (it.color ? ' ' + BOT_COLOR_FEM_[it.color] : ''));
+    if (o.teeShort) { if (it.color) parts.push((BOT_COLOR_SHORT_[it.color] || '') + (it.washed ? ' виварена' : '')); }
+    else parts.push('футболка' + (it.color ? ' ' + BOT_COLOR_FEM_[it.color] : '') + (it.washed ? ' виварена' : ''));
   } else {
-    parts.push('худі');                                  // колір худі несе код хN
+    parts.push('худі' + (it.washed ? ' виварене' : ''));   // колір худі несе код хN
   }
   if (it.code > 1) parts.push('х' + it.code);          // код кольору худі: х2/х3/х4 (х1 = чорний, не пишемо)
   if (it.kind === 'hoodie' && it.noFleece) parts.push('БЕЗ ФЛІСУ');
@@ -1961,8 +1977,8 @@ function bot_overflowTexts_(items) {
   var pre = bot_urgentPrefix_(items);
   var thing = function (it, full) {
     var t;
-    if (it.kind === 'tee') t = BOT_COLOR_SHORT_[it.color] || 'футб';
-    else if (it.kind === 'hoodie') t = 'худі';
+    if (it.kind === 'tee') t = (BOT_COLOR_SHORT_[it.color] || 'футб') + (it.washed ? ' виварена' : '');
+    else if (it.kind === 'hoodie') t = 'худі' + (it.washed ? ' виварене' : '');
     else if (it.kind === 'sticker') t = bot_nameForLevel_(it, { glue: true });
     else if (it.kind === 'cap') t = 'кепка';
     else t = '';
@@ -3656,8 +3672,6 @@ function bot_cmdSetDesc(chatId, arg) {
 
 // ---------- /backfill: ТТН для замовлень, які вже є в таблиці (імпорт з експорту Telegram) ----------
 
-var BOT_CODE_OF_COLOR_ = { 'Чорний': 1, 'Білий': 2, 'Графітовий': 3, 'Сірий': 4 };
-
 /** Рядок «Замовлення» → вигляд розібраного замовлення для Shorten.gs (оригінального тексту повідомлення в таблиці немає). */
 function bot_orderAsParsed_(o) {
   var code = o.colorCode || 0;
@@ -5167,6 +5181,90 @@ function bot_tgImportApply(plan) {
   return { added: rowNums.length, rows: rowNums };
 }
 
+// =====================================================================
+// «Виварене»: виправити тип і собівартість уже доданих замовлень за експортом Telegram
+// =====================================================================
+
+/**
+ * Чиста логіка. Для замовлень, де в тексті є «виварене», порівнює тип/собівартість у таблиці з тим, що має бути.
+ * Уже ОПЛАЧЕНІ рядки не змінює — лише повідомляє. @return {changes, paidSkipped, missing, unchanged, delta}
+ */
+function bot_planWashedFix(messages, orders, priceRows) {
+  var byNo = {}; orders.forEach(function (o) { if (o.no !== '' && !byNo[o.no]) byNo[o.no] = o; });
+  var plan = { changes: [], paidSkipped: [], missing: [], unchanged: 0, delta: 0, checked: 0 };
+  var seen = {};
+  messages.slice().sort(function (a, b) { return a.id - b.id; }).forEach(function (m) {
+    if (m.service || !m.text || !/виварен/i.test(m.text)) return;
+    bot_parseOrderMessage(m.text).forEach(function (p) {
+      if (seen[p.no]) return; seen[p.no] = true;
+      if (BOT_WASHED_TYPES.indexOf(p.type) < 0) return;
+      plan.checked++;
+      var row = byNo[p.no];
+      if (!row) { plan.missing.push(p.no); return; }
+      if (row.status !== 'В роботі') return;
+      var b = bot_buildOrderFields_(p, row.date || new Date(), priceRows, 'В роботі');
+      var newCost = Number(b.fields.cost) || 0;
+      if (row.type === p.type && row.cost === newCost) { plan.unchanged++; return; }
+      var ch = { row: row._row, no: p.no, fromType: row.type, toType: p.type, oldCost: row.cost, newCost: newCost,
+        fields: { type: p.type, color: p.color, colorCode: p.colorCode || '', cost: newCost }, issues: b.issues, yellow: b.yellow, oldNote: row.note };
+      if (row.paid === 'Оплачено') { plan.paidSkipped.push(ch); return; }
+      plan.changes.push(ch); plan.delta += newCost - row.cost;
+    });
+  });
+  return plan;
+}
+
+function bot_washedFixApply(plan) {
+  bot_withLock(function () {
+    bot_patchOrders(plan.changes.map(function (c) {
+      var f = {}; Object.keys(c.fields).forEach(function (k) { f[k] = c.fields[k]; });
+      f.note = bot_mergeNote_(c.oldNote, c.issues);
+      return { row: c.row, fields: f };
+    }));
+    var sh = bot_ordersSheet(), map = bot_ordersMap(sh);
+    plan.changes.forEach(function (c) { bot_clearYellow(c.row, ['type', 'color', 'size', 'cost']); bot_markYellow_(sh, map, c.row, c.yellow); });
+    bot_log('ІНФО', 'виварене', 'виправлено ' + plan.changes.length + ' рядків, різниця ' + plan.delta + ' грн');
+  });
+}
+
+function bot_washedFixText(plan, done) {
+  var L = [done ? '✅ «Виварене» виправлено' : 'Знайдено в експорті'];
+  L.push('Замовлень з «виварене»: ' + plan.checked + '. ' + (done ? 'Виправлено' : 'Буде виправлено') + ' рядків: ' + plan.changes.length + ', уже правильних: ' + plan.unchanged + '.');
+  L.push('Зміна собівартості: ' + (plan.delta >= 0 ? '+' : '') + bot_fmtNum(plan.delta) + ' грн.');
+  if (plan.paidSkipped.length) L.push('⚠️ Уже ОПЛАЧЕНІ (не змінюю, перевірте вручну): ' + plan.paidSkipped.map(function (c) { return '№' + c.no + ' (' + bot_fmtNum(c.oldCost) + '→' + bot_fmtNum(c.newCost) + ')'; }).join(', '));
+  if (plan.missing.length) L.push('Немає в таблиці (додайте імпортом): ' + plan.missing.join(', '));
+  plan.changes.slice(0, 12).forEach(function (c) { L.push('• №' + c.no + ': ' + (c.fromType || '—') + ' → ' + c.toType + ', ' + bot_fmtNum(c.oldCost) + ' → ' + bot_fmtNum(c.newCost) + ' грн'); });
+  if (plan.changes.length > 12) L.push('… і ще ' + (plan.changes.length - 12));
+  return L.join('\n');
+}
+
+function bot_tgReadMessages_(urls) {
+  var ids = String(urls).split(/[\s,;]+/).filter(Boolean).map(bot_driveIdFromUrl);
+  if (!ids.length || ids.some(function (x) { return !x; })) throw new Error('Не схоже на посилання на файл Google Диска.');
+  var messages = [];
+  ids.forEach(function (id) {
+    var html = DriveApp.getFileById(id).getBlob().getDataAsString('UTF-8');
+    if (html.indexOf('class="message ') < 0) throw new Error('У файлі немає повідомлень Telegram (потрібен messages.html).');
+    messages = messages.concat(bot_parseTelegramExport(html));
+  });
+  return messages;
+}
+
+function bot_menuWashedFix() {
+  var ui = bot_ui_();
+  var r = ui.prompt('«Виварене»: виправити тип і собівартість', 'Вставте посилання на messages.html з вашого Google Диска (той самий файл, що й для імпорту). Бот знайде замовлення з «виварене» і виправить їм тип та собівартість за «Прайсом» (1490 грн). Оплачені рядки не чіпаю.', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  try {
+    var plan = bot_planWashedFix(bot_tgReadMessages_(r.getResponseText()), bot_readOrders(), bot_readPriceRows());
+    if (!plan.changes.length) { bot_alert_('Нічого виправляти', bot_washedFixText(plan, false)); return; }
+    var go = ui.alert('Виправити?', bot_washedFixText(plan, false) + '\n\nВиправити ці рядки?', ui.ButtonSet.YES_NO);
+    if (go !== ui.Button.YES) return;
+    bot_washedFixApply(plan);
+    bot_alert_('Готово', bot_washedFixText(plan, true));
+    try { bot_buildSummary(); } catch (e) { bot_log('УВАГА', 'підсумки після «виварене»', e.message); }
+  } catch (e) { bot_alert_('Не вдалося', e.message); }
+}
+
 
 // ======================= Menu.gs =======================
 /**
@@ -5201,6 +5299,7 @@ function onOpen() {
     .addSeparator()
     .addItem('Імпорт з попередньої версії', 'bot_menuImport')
     .addItem('Імпорт замовлень з експорту Telegram', 'bot_menuTgImport')
+    .addItem('«Виварене»: виправити тип і собівартість', 'bot_menuWashedFix')
     .addSeparator()
     .addItem('Режим запису в НП: показати / бойовий / перевірка', 'bot_menuMode')
     .addSeparator()

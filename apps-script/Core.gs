@@ -289,13 +289,21 @@ function bot_parseOrderSegment_(lines) {
   if (!res.type && /^кепк/i.test(bot_deLatin_(res.print.toLowerCase()))) res.type = 'Кепка';                          // «15100. Кепка Ferrari - 0132»
   if (/^принти?\s*$/i.test(res.print) && extras.length) res.print = res.print + ' ' + extras.join(' / ');
 
+  // «виварене» (будь-яка річ) — окремий тип з власною ціною: Худі виварене / Футболка виварена / Кепка виварена / Виварене
+  var washedTxt = (res.print + ' ' + lines.join(' ')).toLowerCase();
+  if (/виварен/.test(washedTxt) && res.type !== 'Стікерпак') {
+    if (res.type === 'Кепка') res.type = 'Кепка виварена';
+    else if (res.type === 'Футболка') res.type = 'Футболка виварена';
+    else if (res.type === 'Худі фліс' || res.type === 'Худі не утеплене' || res.typeAmbiguous) { res.type = 'Худі виварене'; res.typeAmbiguous = false; }
+    else if (!res.type) res.type = 'Виварене';
+  }
   if (!res.type) {
     res.issues.push({ field: 'type', text: res.typeAmbiguous ? 'Худі: не вказано «з флісом» чи «без флісу»' : 'не вказано вид речі (футболка / худі)' });
   }
   var noSz = BOT_NO_SIZE_COLOR_TYPES.indexOf(res.type) >= 0;
   if (!res.color && res.colorCode && BOT_COLOR_CODES[res.colorCode]) res.color = BOT_COLOR_CODES[res.colorCode];   // х1 чорний, х3 графітовий, х4 сірий
   // колір обов'язковий лише для футболки: у повідомленнях склад не пише колір худі
-  if (!res.color && !noSz && res.type !== 'Худі фліс' && res.type !== 'Худі не утеплене' && !res.typeAmbiguous) res.issues.push({ field: 'color', text: 'не вказано колір' });
+  if (!res.color && !noSz && res.type !== 'Худі фліс' && res.type !== 'Худі не утеплене' && res.type !== 'Худі виварене' && !res.typeAmbiguous) res.issues.push({ field: 'color', text: 'не вказано колір' });
   if (!res.size && !noSz) res.issues.push({ field: 'size', text: 'не вказано розмір' });
   if (!res.ttn) {
     res.issues.push({ field: 'ttn', text: badTtn ? 'ТТН «' + badTtn + '» — не 14 цифр' : 'немає ТТН' });

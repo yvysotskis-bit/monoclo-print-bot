@@ -282,3 +282,46 @@ test('/backfill: ТТН замовлень з таблиці (імпорт) → 
   assert.equal(ttnRows(env)[0].status, 'Перевірка');
   assert.ok(ownerTexts(env).some(t => /Режим перевірки/.test(t) && t.includes(T1)));
 });
+
+test('«Виварене»: розбір — худі/футболка/кепка виварена, ціна 1490, кольори, без зайвих зауважень', () => {
+  const env = fresh(); const B = env.ctx;
+  const P = (t) => B.bot_parseOrderMessage(t)[0];
+  const hg = P(`14900. Принт не потрібен\nХуді графіт виварене\nS\n\n${T1}`);
+  assert.equal(hg.type, 'Худі виварене'); assert.equal(hg.color, 'Графітовий'); assert.deepEqual([...hg.issues], []);
+  const hs = P(`14832. Принт не потрібен\nХуді сіре виварене\nS\n\n${T1}`);
+  assert.equal(hs.type, 'Худі виварене'); assert.equal(hs.color, 'Сірий'); assert.deepEqual([...hs.issues], []);
+  const cap = P(`14759. Кепка сіра виварена Макларен - K-MC-GRAPHITE-1\n\n${T1}`);
+  assert.equal(cap.type, 'Кепка виварена'); assert.deepEqual([...cap.issues], []);
+  const tee = P(`15000. Принт A\nФутболка чорна виварена\nM\nПринт позаду\n${T1}`);
+  assert.equal(tee.type, 'Футболка виварена');
+  const plain = P(`15001. Принт A\nХуді x3 БЕЗ ФЛІСУ\nM\n${T1}`);
+  assert.equal(plain.type, 'Худі не утеплене');
+  const prices = B.bot_readPriceRows();
+  [hg, hs, cap, tee].forEach(p => assert.equal(B.bot_buildOrderFields_(p, new Date(), prices, 'В роботі').fields.cost, 1490));
+  // опис: «виварене» і колір (код) не губляться
+  assert.equal(B.bot_buildDescription([hg]).text, '14900 без принта худі виварене х3 S');
+  assert.match(B.bot_buildDescription([hs]).text, /без принта худі виварене х4 S/);
+  assert.match(B.bot_buildDescription([tee]).text, /футболка чорна виварена M/);
+});
+
+test('«Виварене»: виправлення вже доданих рядків — тип і собівартість, оплачені не чіпаємо, повтор нічого не міняє', () => {
+  const env = fresh(); const c = env.ctx;
+  const d = c.bot_makeDate(2026, 9, 10);
+  const mk = (no, type, cost, extra) => c.bot_appendOrderRow(Object.assign({ no, date: d, print: 'Принт не потрібен', type, color: 'Сірий', size: 'S', placement: '', prints: 1, ttn: T1, cost, status: 'В роботі', paid: 'Не оплачено', msgId: String(no) }, extra), []);
+  mk(14832, '', 0);                                   // худі виварене, колись ✍️ (не розпізнано)
+  mk(14900, 'Худі не утеплене', 740);                 // графіт виварене, записано як звичайне
+  mk(14901, 'Худі не утеплене', 740, { paid: 'Оплачено' });
+  const msg = (id, no, line) => ({ id, service: '', date: d, text: `${no}. Принт не потрібен\n${line}\nS\n\n${T1}` });
+  const messages = [msg(1, 14832, 'Худі сіре виварене'), msg(2, 14900, 'Худі графіт виварене'), msg(3, 14901, 'Худі графіт виварене'), msg(4, 14999, 'Худі графіт виварене')];
+  const plan = c.bot_planWashedFix(messages, c.bot_readOrders(), c.bot_readPriceRows());
+  assert.equal(plan.changes.length, 2); assert.equal(plan.paidSkipped.length, 1); assert.deepEqual([...plan.missing], [14999]);
+  assert.equal(plan.delta, 1490 + (1490 - 740));
+  c.bot_washedFixApply(plan);
+  const rows = c.bot_readOrders();
+  const g = (n) => rows.find(r => r.no === n);
+  assert.equal(g(14832).type, 'Худі виварене'); assert.equal(g(14832).cost, 1490);
+  assert.equal(g(14900).type, 'Худі виварене'); assert.equal(g(14900).cost, 1490); assert.equal(g(14900).color, 'Графітовий');
+  assert.equal(g(14901).cost, 740);                    // оплачений — без змін
+  const again = c.bot_planWashedFix(messages, c.bot_readOrders(), c.bot_readPriceRows());
+  assert.equal(again.changes.length, 0); assert.equal(again.unchanged, 2);
+});
