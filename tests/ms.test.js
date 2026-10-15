@@ -838,3 +838,11 @@ test('Аудит: /bind в ІНШІЙ групі не перезаписує ч�
   env.update({ message: { message_id: ++mid, date: ts('2026-10-07T05:00:00Z'), chat: { id: other, type: 'supergroup' }, from: { id: OWNER }, is_topic_message: true, message_thread_id: 3, text: '/bind orders force' } }); env.poll();
   assert.equal(c.bot_setting('GROUP_CHAT_ID'), String(other));
 });
+
+test('Аудит: ТТН з пробілами в повідомленні — походження доведено; опис і реєстр працюють', () => {
+  const env = liveEnv(); const c = env.ctx;
+  env.update(groupMsg('15100. Принт A\nФутболка чорна\nM\nПринт позаду\n\n2045 1556 0677 18')); env.poll();
+  assert.equal(ttnRows(env)[0].ttn, T1);
+  assert.ok(c.bot_ttnThreadEvidence_(Object.assign({}, ttnRows(env)[0]), []));                 // навіть без рядків «Замовлення»
+  assert.equal(ttnRows(env)[0].status, 'Записано в НП');
+});

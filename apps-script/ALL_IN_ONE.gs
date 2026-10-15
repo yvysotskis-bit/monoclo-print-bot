@@ -4116,7 +4116,7 @@ function bot_baseMsgKey_(k) { return String(k || '').split('#')[0].split('.')[0]
 function bot_ttnThreadEvidence_(r, orders) {
   if (r.status === 'Знято') return false;
   if (orders.some(function (o) { return o.ttn === r.ttn && o.msgId; })) return true;
-  return !!r.msgId && String(r.original).indexOf(r.ttn) >= 0;
+  return !!r.msgId && String(r.original).replace(/[\s\u00a0]/g, '').indexOf(r.ttn) >= 0;      // ТТН у повідомленні могла бути записана з пробілами «2045 1556 …»
 }
 
 /** Замовлення ТТН з таблиці «Замовлення» (нескасовані) у вигляді розібраних — для відновлення опису. */
