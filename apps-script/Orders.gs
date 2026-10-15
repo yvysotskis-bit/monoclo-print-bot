@@ -45,7 +45,7 @@ function bot_buildOrderFields_(p, orderDate, priceRows, status) {
   return {
     fields: {
       no: p.no, date: orderDate, print: p.print, type: p.type, color: p.color, size: p.size, placement: p.placement,
-      prints: p.prints, ttn: p.ttn, cost: cost
+      prints: p.prints, colorCode: p.colorCode || '', ttn: p.ttn, cost: cost
     },
     issues: issues, yellow: yellow
   };
@@ -120,8 +120,17 @@ function bot_handleOrderMessage(msg, caption, edited) {
         bot_log('ІНФО', 'повтор замовлення №' + p.no, 'та сама ТТН — проігноровано');
         return;
       }
+      if (dup.length && !dup[0].ttn && p.ttn && dup[0].status !== 'Скасовано') {   // ТТН дописали окремим повідомленням (перше було без ТТН) — прив'язуємо до наявного рядка
+        bot_patchOrders([{ row: dup[0]._row, fields: { ttn: p.ttn, stage: '', npStatus: '', ttnDate: '', handoff: '', arrived: '' } }]);
+        bot_clearYellow(dup[0]._row, ['ttn']);
+        BOT_NEW_TTN_ROWS_.push(dup[0]._row);
+        dup[0].ttn = p.ttn;
+        bot_sendToOwners('ℹ️ ТТН ' + bot_code(p.ttn) + ' дописано до замовлення №' + p.no + ' (воно було без ТТН).' + linkTxt);
+        if (react !== '✍') react = '👌';
+        return;
+      }
       if (dup.length) {
-        bot_sendToOwners('⚠️ Дубль: замовлення №' + p.no + ' уже є в таблиці (рядок ' + dup[0]._row + '). Новий рядок не додаю.' + linkTxt);
+        bot_sendToOwners('⚠️ Дубль: замовлення №' + p.no + ' уже є в таблиці (рядок ' + dup[0]._row + (dup[0].ttn && p.ttn && dup[0].ttn !== p.ttn ? ', ТТН там ' + dup[0].ttn + ', а в цьому повідомленні ' + p.ttn + ' — номер замовлення вже використаний, рядок не змінюю' : '') + '). Новий рядок не додаю.' + linkTxt);
         return;
       }
       var b = bot_buildOrderFields_(p, orderDate, priceRows, 'В роботі');
@@ -136,6 +145,9 @@ function bot_handleOrderMessage(msg, caption, edited) {
       if (react !== '✍') react = b.issues.length ? '✍' : '👌';
       if (b.issues.length) bot_sendToOwners('✍️ Замовлення №' + p.no + ' додано, але: ' + bot_esc(b.issues.join(', ')) + '. Клітинки в таблиці підсвічені жовтим.' + linkTxt);
     });
+
+    try { bot_ttnSync(msg, caption, list, edited); }                // аркуш «ТТН»: оригінал + скорочений опис
+    catch (e) { bot_log('ПОМИЛКА', 'ТТН-опис', e.message); bot_sendToOwners('⚠️ Не вдалося зберегти опис ТТН: ' + bot_esc(bot_scrub(e.message))); }
 
     if (react) bot_react(chat.id, msg.message_id, react);
   });
@@ -182,6 +194,8 @@ function bot_cmdCancel(chatId, arg) {
       return { row: o._row, fields: { status: 'Скасовано', cost: 0, note: (o.note ? o.note + '; ' : '') + 'Скасовано /cancel, було ' + bot_fmtNum(o.cost) + ' грн' } };
     });
     bot_patchOrders(patches);
+    var cancelTtns = []; rows.forEach(function (o) { if (o.ttn && cancelTtns.indexOf(o.ttn) < 0) cancelTtns.push(o.ttn); });
+    try { bot_ttnAfterCancel(cancelTtns); } catch (e) { bot_log('ПОМИЛКА', 'ТТН після /cancel', e.message); }
     bot_log('ІНФО', 'cancel №' + no, rows.length + ' рядків');
     bot_send(chatId, '✅ Замовлення №' + no + ' скасовано (рядків: ' + rows.length + '), собівартість 0.');
   });
@@ -189,9 +203,9 @@ function bot_cmdCancel(chatId, arg) {
 
 function bot_cmdBorg(chatId) {
   var orders = bot_readOrders(), pays = bot_readPayments();
-  var d = bot_computeDebt(orders, pays);
+  var d = bot_computeDebt(orders, pays, bot_openingFromSettings());
   bot_send(chatId, '💰 <b>Борг: ' + bot_fmtMoney(d.debt) + '</b>\n' +
-    'Собівартість усього: ' + bot_fmtMoney(d.cost) + '\n' +
+    'Собівартість усього: ' + bot_fmtMoney(d.cost) + (d.opening ? ' (разом із початковим залишком ' + bot_fmtMoney(d.opening) + ')' : '') + '\n' +
     'Оплачено: ' + bot_fmtMoney(d.paid) + ' (оплат: ' + pays.length + ')\n\n' +
     'Отримані/відмовлені, але ще не оплачені ТТН: <b>' + d.unpaidDelivered.count + '</b> — ' + bot_fmtMoney(d.unpaidDelivered.sum));
 }

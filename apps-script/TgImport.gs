@@ -34,7 +34,7 @@ function bot_htmlToText_(h) {
 /** messages.html → [{id, service, text, date, replyTo, from, edited}] */
 function bot_parseTelegramExport(html) {
   var blocks = String(html).split('<div class="message ').slice(1);
-  var out = [];
+  var out = [], lastFrom = '';
   blocks.forEach(function (b) {
     var idm = b.match(/id="message(-?\d+)"/);
     if (!idm) return;
@@ -47,7 +47,8 @@ function bot_parseTelegramExport(html) {
       var tm = b.match(/<div class="text">\s*([\s\S]*?)\s*<\/div>/);
       msg.text = tm ? bot_htmlToText_(tm[1]) : '';
       var fm = b.match(/<div class="from_name">\s*([\s\S]*?)\s*<\/div>/);
-      msg.from = fm ? bot_htmlToText_(fm[1]).trim() : '';
+      msg.from = fm ? bot_htmlToText_(fm[1]).trim() : lastFrom;       // «joined»-повідомлення (підряд від того ж автора) не мають імені — беремо попереднє
+      if (fm) lastFrom = msg.from;
       var rm = b.match(/GoToMessage\((\d+)\)/);
       msg.replyTo = rm ? parseInt(rm[1], 10) : null;
       var dm = b.match(/class="pull_right date details" title="([^"]+)"([^>]*)>([^<]*)/);
@@ -169,4 +170,88 @@ function bot_tgImportApply(plan) {
     try { bot_npUpdate({ rows: rowNums, maxTtn: 3000 }); } catch (e) { bot_log('ПОМИЛКА', 'НП після імпорту з Telegram', e.message); }
   }
   return { added: rowNums.length, rows: rowNums };
+}
+
+// =====================================================================
+// «Виварене»: виправити тип і собівартість уже доданих замовлень за експортом Telegram
+// =====================================================================
+
+/**
+ * Чиста логіка. Для замовлень, де в тексті є «виварене», порівнює тип/собівартість у таблиці з тим, що має бути.
+ * Уже ОПЛАЧЕНІ рядки не змінює — лише повідомляє. @return {changes, paidSkipped, missing, unchanged, delta}
+ */
+function bot_planWashedFix(messages, orders, priceRows) {
+  var byNo = {}; orders.forEach(function (o) { if (o.no !== '' && !byNo[o.no]) byNo[o.no] = o; });
+  var plan = { changes: [], paidSkipped: [], missing: [], unchanged: 0, delta: 0, checked: 0 };
+  var seen = {};
+  messages.slice().sort(function (a, b) { return a.id - b.id; }).forEach(function (m) {
+    if (m.service || !m.text || !/виварен/i.test(m.text)) return;
+    bot_parseOrderMessage(m.text).forEach(function (p) {
+      if (seen[p.no]) return; seen[p.no] = true;
+      if (BOT_WASHED_TYPES.indexOf(p.type) < 0) return;
+      plan.checked++;
+      var row = byNo[p.no];
+      if (!row) { plan.missing.push(p.no); return; }
+      if (row.status !== 'В роботі') return;
+      var b = bot_buildOrderFields_(p, row.date || new Date(), priceRows, 'В роботі');
+      var newCost = Number(b.fields.cost) || 0;
+      if (row.type === p.type && row.cost === newCost) { plan.unchanged++; return; }
+      var ch = { row: row._row, no: p.no, fromType: row.type, toType: p.type, oldCost: row.cost, newCost: newCost,
+        fields: { type: p.type, color: p.color, colorCode: p.colorCode || '', cost: newCost }, issues: b.issues, yellow: b.yellow, oldNote: row.note };
+      if (row.paid === 'Оплачено') { plan.paidSkipped.push(ch); return; }
+      plan.changes.push(ch); plan.delta += newCost - row.cost;
+    });
+  });
+  return plan;
+}
+
+function bot_washedFixApply(plan) {
+  bot_withLock(function () {
+    bot_patchOrders(plan.changes.map(function (c) {
+      var f = {}; Object.keys(c.fields).forEach(function (k) { f[k] = c.fields[k]; });
+      f.note = bot_mergeNote_(c.oldNote, c.issues);
+      return { row: c.row, fields: f };
+    }));
+    var sh = bot_ordersSheet(), map = bot_ordersMap(sh);
+    plan.changes.forEach(function (c) { bot_clearYellow(c.row, ['type', 'color', 'size', 'cost']); bot_markYellow_(sh, map, c.row, c.yellow); });
+    bot_log('ІНФО', 'виварене', 'виправлено ' + plan.changes.length + ' рядків, різниця ' + plan.delta + ' грн');
+  });
+}
+
+function bot_washedFixText(plan, done) {
+  var L = [done ? '✅ «Виварене» виправлено' : 'Знайдено в експорті'];
+  L.push('Замовлень з «виварене»: ' + plan.checked + '. ' + (done ? 'Виправлено' : 'Буде виправлено') + ' рядків: ' + plan.changes.length + ', уже правильних: ' + plan.unchanged + '.');
+  L.push('Зміна собівартості: ' + (plan.delta >= 0 ? '+' : '') + bot_fmtNum(plan.delta) + ' грн.');
+  if (plan.paidSkipped.length) L.push('⚠️ Уже ОПЛАЧЕНІ (не змінюю, перевірте вручну): ' + plan.paidSkipped.map(function (c) { return '№' + c.no + ' (' + bot_fmtNum(c.oldCost) + '→' + bot_fmtNum(c.newCost) + ')'; }).join(', '));
+  if (plan.missing.length) L.push('Немає в таблиці (додайте імпортом): ' + plan.missing.join(', '));
+  plan.changes.slice(0, 12).forEach(function (c) { L.push('• №' + c.no + ': ' + (c.fromType || '—') + ' → ' + c.toType + ', ' + bot_fmtNum(c.oldCost) + ' → ' + bot_fmtNum(c.newCost) + ' грн'); });
+  if (plan.changes.length > 12) L.push('… і ще ' + (plan.changes.length - 12));
+  return L.join('\n');
+}
+
+function bot_tgReadMessages_(urls) {
+  var ids = String(urls).split(/[\s,;]+/).filter(Boolean).map(bot_driveIdFromUrl);
+  if (!ids.length || ids.some(function (x) { return !x; })) throw new Error('Не схоже на посилання на файл Google Диска.');
+  var messages = [];
+  ids.forEach(function (id) {
+    var html = DriveApp.getFileById(id).getBlob().getDataAsString('UTF-8');
+    if (html.indexOf('class="message ') < 0) throw new Error('У файлі немає повідомлень Telegram (потрібен messages.html).');
+    messages = messages.concat(bot_parseTelegramExport(html));
+  });
+  return messages;
+}
+
+function bot_menuWashedFix() {
+  var ui = bot_ui_();
+  var r = ui.prompt('«Виварене»: виправити тип і собівартість', 'Вставте посилання на messages.html з вашого Google Диска (той самий файл, що й для імпорту). Бот знайде замовлення з «виварене» і виправить їм тип та собівартість за «Прайсом» (1490 грн). Оплачені рядки не чіпаю.', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  try {
+    var plan = bot_planWashedFix(bot_tgReadMessages_(r.getResponseText()), bot_readOrders(), bot_readPriceRows());
+    if (!plan.changes.length) { bot_alert_('Нічого виправляти', bot_washedFixText(plan, false)); return; }
+    var go = ui.alert('Виправити?', bot_washedFixText(plan, false) + '\n\nВиправити ці рядки?', ui.ButtonSet.YES_NO);
+    if (go !== ui.Button.YES) return;
+    bot_washedFixApply(plan);
+    bot_alert_('Готово', bot_washedFixText(plan, true));
+    try { bot_buildSummary(); } catch (e) { bot_log('УВАГА', 'підсумки після «виварене»', e.message); }
+  } catch (e) { bot_alert_('Не вдалося', e.message); }
 }

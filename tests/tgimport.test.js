@@ -140,7 +140,7 @@ test('Меню-імпорт з Диска: план → запис 74 рядкі
   assert.ok(rows.slice(-74).every(r => /^\d{14}$/.test(r.ttn) && r.msgId && r.paid === 'Не оплачено'));
   assert.equal(env.ctx.bot_sumBy_(rows.slice(-74), r => r.cost), 38440 + 0);
   // ТТН у тексті, а не числом
-  assert.equal(typeof env.sheet('Замовлення').getRange(rows[rows.length - 1]._row, 9).getValue(), 'string');
+  assert.equal(typeof env.sheet('Замовлення').getRange(rows[rows.length - 1]._row, 10).getValue(), 'string');
   // повторно — нічого нового
   const again = env.ctx.bot_tgImportPlan(url);
   assert.equal(again.rows.length, 0);

@@ -518,7 +518,37 @@ function bot_payConfirm_(rec0, ctx) {
 
 // ---------- запис в «Оплати» (6.4) ----------
 
-function bot_addPaymentRow_(reconId, sum) {
+/** Формула «Накопичено оплат» для рядка row: лише оплати ПІСЛЯ дати початкового залишку (Підсумки!H6; 0 — усі). */
+function bot_accumFormula_(map, row) {
+  var s = bot_colLetter(map.sum), d = bot_colLetter(map.date);
+  return bot_fx('=SUMIFS($' + s + '$2:' + s + row + ',$' + d + '$2:' + d + row + ',">"&\'' + BOT_SHEETS.summary + '\'!$H$6)');
+}
+
+/** Виправляє формули «Накопичено / Собівартість / Залишок боргу» лише в тих рядках «Оплат», де вони дали помилку (#ERROR! від формул з іншим роздільником). */
+function bot_rewritePaymentFormulas() {
+  bot_withLock(function () {
+    var sh = bot_sheet(BOT_SHEETS.payments);
+    var map = bot_headerMap(sh, bot_payColsAlias_(), ['recon', 'accum', 'cost', 'balance']);
+    if (!map.accum || !map.cost || !map.balance) return;
+    var last = sh.getLastRow(); if (last < 2) return;
+    var width = sh.getLastColumn();
+    var vals = sh.getRange(2, 1, last - 1, width).getValues();
+    function isErr(v) { return typeof v === 'string' && v.charAt(0) === '#'; }
+    var fixed = 0;
+    vals.forEach(function (r, i) {
+      var row = i + 2;
+      if (r[map.sum - 1] === '' || r[map.sum - 1] === null) return;
+      if (!(isErr(r[map.accum - 1]) || isErr(r[map.cost - 1]) || isErr(r[map.balance - 1]))) return;
+      sh.getRange(row, map.accum).setFormula(bot_accumFormula_(map, row));
+      sh.getRange(row, map.cost).setFormula("='" + BOT_SHEETS.summary + "'!$A$5");
+      sh.getRange(row, map.balance).setFormula('=' + bot_colLetter(map.cost) + row + '-' + bot_colLetter(map.accum) + row);
+      fixed++;
+    });
+    if (fixed) bot_log('ІНФО', 'формули «Оплат»', 'виправлено рядків: ' + fixed);
+  });
+}
+
+function bot_addPaymentRow_(reconId, sum, dateOpt) {
   return bot_withLock(function () {
     var sh = bot_sheet(BOT_SHEETS.payments);
     var map = bot_headerMap(sh, bot_payColsAlias_(), ['recon', 'accum', 'cost', 'balance']);
@@ -530,16 +560,21 @@ function bot_addPaymentRow_(reconId, sum) {
     var existing = last >= 2 ? sh.getRange(2, map.recon, last - 1, 1).getValues() : [];
     for (var i = 0; i < existing.length; i++) if (String(existing[i][0]) === reconId) return { duplicate: true, row: i + 2 };
     var nos = last >= 2 ? sh.getRange(2, map.no, last - 1, 1).getValues() : [];
+    var dts = last >= 2 ? sh.getRange(2, map.date, last - 1, 1).getValues() : [], sms = last >= 2 ? sh.getRange(2, map.sum, last - 1, 1).getValues() : [];
     var lastNo = 0, lastRow = 1;
-    nos.forEach(function (r, i) { var n = Number(r[0]); if (r[0] !== '' && !isNaN(n)) { lastNo = Math.max(lastNo, n); lastRow = i + 2; } });
+    nos.forEach(function (r, i) {
+      var n = Number(r[0]); if (r[0] !== '' && !isNaN(n)) lastNo = Math.max(lastNo, n);
+      if ((r[0] !== '' && !isNaN(n)) || (dts[i] && dts[i][0] !== '') || (sms[i] && sms[i][0] !== '')) lastRow = i + 2;      // рядок, внесений вручну без «№», не затираємо
+    });
     var row = lastRow + 1;
     var width = sh.getLastColumn();
     if (row > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 50);
     var arr = []; for (var k = 0; k < width; k++) arr.push('');
-    arr[map.no - 1] = lastNo + 1; arr[map.date - 1] = bot_today(); arr[map.sum - 1] = sum; arr[map.recon - 1] = reconId;
+    arr[map.no - 1] = lastNo + 1; arr[map.date - 1] = dateOpt || bot_today(); arr[map.sum - 1] = sum; arr[map.recon - 1] = reconId;
     sh.getRange(row, 1, 1, width).setValues([arr]);
     sh.getRange(row, map.date).setNumberFormat('dd.mm.yyyy');
-    if (map.accum) sh.getRange(row, map.accum).setFormula('=SUM($' + bot_colLetter(map.sum) + '$2:' + bot_colLetter(map.sum) + row + ')');
+    // накопичено — лише оплати ПІСЛЯ дати початкового залишку (раніші вже в ньому); без залишку «Підсумки»!H6 = 0 → усі
+    if (map.accum) sh.getRange(row, map.accum).setFormula(bot_accumFormula_(map, row));
     if (map.cost) sh.getRange(row, map.cost).setFormula("='" + BOT_SHEETS.summary + "'!$A$5");
     if (map.balance && map.cost && map.accum) sh.getRange(row, map.balance).setFormula('=' + bot_colLetter(map.cost) + row + '-' + bot_colLetter(map.accum) + row);
     SpreadsheetApp.flush();

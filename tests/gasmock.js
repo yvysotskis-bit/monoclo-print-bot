@@ -38,6 +38,7 @@ class Range {
     })); return this;
   }
   setValue(v) { return this.setValues([[v]]); }
+  setFormulas(a) { a.forEach((row, i) => row.forEach((f, j) => { const cell = this.sh.getRange(this.r + i, this.c + j); if (typeof f === 'string' && f.startsWith('=')) cell.setFormula(f); else cell.setValue(f); })); return this; }
   setFormula(f) {                                   // моделюємо мову таблиці: «;»-мови не розуміють «,» між аргументами
     const semi = this.sh.ss.semi, bare = String(f).replace(/"[^"]*"/g, '');
     if (semi && bare.includes(',')) return this.setValue('#ERROR!');
@@ -98,7 +99,7 @@ function newEnv(opts) {
   const respond = (obj) => ({ getResponseCode: () => 200, getContentText: () => JSON.stringify(obj) });
   const UrlFetchApp = {
     fetch(url, o) {
-      const payload = o && o.payload ? JSON.parse(o.payload) : {};
+      const payload = o && o.payload ? (typeof o.payload === 'string' ? JSON.parse(o.payload) : o.payload) : {};
       if (/telegram\.org\/file\//.test(url)) return { getResponseCode: () => 200, getBlob: () => mkBlob(state.nextFile) };
       if (state.netFail && state.netFail(url, o)) throw new Error(state.netFailMessage || ('Exception: Address unavailable: ' + url));
       let m = String(url).match(/api\.telegram\.org\/bot[^/]+\/(\w+)/);
@@ -111,6 +112,7 @@ function newEnv(opts) {
           case 'setMessageReaction': tg.reactions.push(payload); return respond({ ok: true, result: true });
           case 'answerCallbackQuery': tg.answers.push(payload); return respond({ ok: true, result: true });
           case 'deleteMessage': tg.deletes.push(payload); return respond({ ok: true, result: true });
+          case 'sendDocument': { const id = tg.nextId++; (tg.documents = tg.documents || []).push(Object.assign({ message_id: id }, payload)); return respond({ ok: true, result: { message_id: id, document: { file_id: 'FILEID' + id } } }); }
           case 'getFile': return respond({ ok: true, result: { file_path: 'docs/file' } });
           case 'getMe': return respond({ ok: true, result: { id: 1, username: 'monoclo_test_bot' } });
           case 'getWebhookInfo': return respond({ ok: true, result: { url: '' } });
@@ -118,6 +120,8 @@ function newEnv(opts) {
           default: return respond({ ok: true, result: true });
         }
       }
+      if (/\[|\]/.test(String(url))) throw new Error('Недійсний аргумент: ' + url);                      // UrlFetchApp не приймає «[]» у посиланні
+      if (/my\.novaposhta\.ua\/orders\/printMarking100x100/.test(url)) { np.printUrls = (np.printUrls || []).concat(url); const pdf = { name: 'm.pdf', bytes: Buffer.from(np.printBad ? '<html>' : '%PDF-1.4 test') }; return { getResponseCode: () => 200, getBlob: () => mkBlob(pdf) }; }
       if (/novaposhta/.test(url)) { np.calls.push(payload); if (np.fail) return respond({ success: false, data: [], errors: [np.fail] }); return respond({ success: true, data: np.handler(payload), errors: [] }); }
       throw new Error('Невідомий URL у моці: ' + url);
     }
@@ -156,7 +160,7 @@ function newEnv(opts) {
   env.run = (code) => vm.runInContext(code, ctx);
   env.sheet = (n) => ss.getSheetByName(n);
   env.rows = (n) => { const s = ss.getSheetByName(n); const v = s.getDataRange().getValues(); return v.slice(1).filter(r => r.some(x => x !== '')); };
-  env.setup = () => { ctx.bot_setupAll(); };
+  env.setup = () => { ctx.bot_setupAll(); ctx.bot_setSetting('OPENING_DEBT', ''); };   // у тестах Монокло початковий залишок вимкнено
   let uid = 1;
   env.update = (u) => { u.update_id = uid++; tg.pending.push(u); return u; };
   env.poll = () => { ctx.bot_poll(); };

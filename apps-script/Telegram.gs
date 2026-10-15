@@ -275,7 +275,7 @@ function bot_onMessage(msg, edited) {
     if (cmd0 && cmd0.cmd === 'start' && !bot_ownerIds().length) {
       bot_setSetting('OWNER_IDS', String(from.id));
       bot_log('ІНФО', 'owner', 'Власник: ' + from.id + ' ' + (from.username || ''));
-      bot_send(chat.id, '👋 Вітаю! Ви — власник бота. Далі:\n1) додайте бота в групу виробництва;\n2) у гілці «Замовлення на клієнта» напишіть <code>/bind orders</code>;\n3) у гілці «Реєстри» — <code>/bind report</code>.\n\n' + bot_helpText());
+      bot_send(chat.id, '👋 Вітаю! Ви — власник бота. Далі:\n1) додайте бота в групу виробництва;\n2) у гілці «Замовлення на клієнта» напишіть <code>/bind orders</code>;\n3) у гілці «Реєстри» — <code>/bind registry</code>.\n\n' + bot_helpText());
       return;
     }
     if (!bot_isOwner(from.id)) { bot_log('УВАГА', 'чужий користувач', 'private ' + from.id + ' ' + (from.username || '')); return; }
@@ -294,7 +294,12 @@ function bot_onMessage(msg, edited) {
       if (!bot_isOwner(from.id)) return;
       return bot_cmdBind(msg, cmd.arg);
     }
+    var payChat = bot_setting('PAY_CHAT_ID');
+    if (cmd && cmd.cmd === 'id') return bot_send(chat.id, 'Ваш Telegram ID: <code>' + from.id + '</code>', bot_threadOf(msg) !== '0' ? { thread: bot_threadOf(msg) } : {});
+    if (cmd && cmd.cmd === 'registry') return bot_registryFromGroup(msg, from);
     var groupId = bot_setting('GROUP_CHAT_ID');
+    var isOrdersChat = groupId && String(chat.id) === String(groupId) && bot_threadOf(msg) === String(bot_setting('ORDERS_THREAD_ID'));
+    if (payChat && String(chat.id) === String(payChat) && !isOrdersChat) return bot_handlePayMessage(msg, edited);   // чат «Отправка отчет» (ніколи не перехоплює гілку замовлень)
     if (!groupId || String(chat.id) !== String(groupId)) return;                       // чужа група
     var ordersThread = bot_setting('ORDERS_THREAD_ID');
     if (ordersThread === '' ) return;
@@ -337,6 +342,15 @@ function bot_helpText() {
     '• /price — чинні ціни; /price Худі фліс 780 15.11.2026 — нова ціна\n' +
     '• /report — ранковий звіт зараз (тільки вам)\n' +
     '• /month — місячний звіт (/month 2026-08 — за вказаний місяць)\n' +
+    '• /desc &lt;ТТН&gt; — опис ТТН і його статус\n' +
+    '• /setdesc &lt;ТТН&gt; &lt;текст&gt; — свій текст опису (до 100 символів; «-» — повернути автоматичний)\n' +
+    '• /backfill — створити описи для замовлень із таблиці (імпорт), яких ще немає в «ТТН»\n' +
+    '• /allocate — які ТТН покривають внесені оплати (позначу «Оплачено» після вашої кнопки); /undoalloc &lt;ID&gt; — скасувати\n' +
+    '• /addpay &lt;сума&gt; [дата] — додати оплату вручну (напр. <code>/addpay 21401 12.09.2026</code>)\n' +
+    '• /registry — реєстр зараз; /registry preview — що ввійде; /registry now — ЕКСТРЕНИЙ додатковий реєстр\n' +
+    '• /nptest &lt;ТТН&gt; &lt;текст&gt; — перевірка запису на ТЕСТОВІЙ ТТН; /npdoc &lt;ТТН&gt; — що віддає НП\n' +
+    '• /retry [ТТН] — повторити запис опису для ТТН з «Помилка НП»\n' +
+    '• /live — бойовий режим (запис у НП); /preview — режим перевірки\n' +
     '• /help — ця довідка';
 }
 
@@ -354,18 +368,48 @@ function bot_onCommand(msg, c) {
     case 'price': return bot_cmdPrice(chatId, c.arg);
     case 'report': return bot_cmdReport(chatId);
     case 'month': return bot_cmdMonth(chatId, c.arg);
+    case 'desc': return bot_cmdDesc(chatId, c.arg);
+    case 'backfill': return bot_cmdBackfill(chatId);
+    case 'addpay': return bot_cmdAddPay(chatId, c.arg, msg);
+    case 'allocate': return bot_cmdAllocate(chatId);
+    case 'undoalloc': return bot_cmdUndoAlloc(chatId, c.arg);
+    case 'setdesc': return bot_cmdSetDesc(chatId, c.arg);
+    case 'registry': return bot_cmdRegistry(chatId, c.arg);
+    case 'live': return bot_cmdLive(chatId);
+    case 'retry': return bot_cmdRetry(chatId, c.arg);
+    case 'unbind': if (String(c.arg).trim().toLowerCase() === 'payments') { bot_setSetting('PAY_CHAT_ID', ''); bot_setSetting('PAY_THREAD_ID', ''); return bot_send(chatId, 'Чат оплат відключено.'); } return bot_send(chatId, 'Формат: <code>/unbind payments</code>');
+    case 'preview': return bot_cmdPreviewMode(chatId);
+    case 'npdoc': return bot_cmdNpDoc(chatId, c.arg);
+    case 'nptest': return bot_cmdNpTest(chatId, c.arg);
     default: return bot_send(chatId, 'Не знаю такої команди. /help — що я вмію.');
   }
 }
 
 /** /bind orders | /bind report — запам'ятати цю гілку. */
 function bot_cmdBind(msg, arg) {
-  var what = String(arg || '').trim().toLowerCase();
+  var what = String(arg || '').trim().toLowerCase().replace(/\s+force$/, '');
   var chatId = msg.chat.id, thread = bot_threadOf(msg);
   var opts = thread !== '0' ? { thread: thread } : {};
+  if (what === 'registry') what = 'report';
+  if (what === 'payments') {
+    var ordersGroup = bot_setting('GROUP_CHAT_ID');
+    if (ordersGroup && String(chatId) === String(ordersGroup) && thread === bot_setting('ORDERS_THREAD_ID')) {
+      bot_sendToOwners('⛔ Це гілка замовлень — тут `/bind payments` не підключаю, інакше замовлення перестали б прийматись. Напишіть <code>/bind payments</code> у чаті «Отправка отчет».');
+      return;
+    }                                      // чат «Отправка отчет»: у ньому бот НІЧОГО не пише, підтвердження — лише власнику в особисті
+    bot_withLock(function () { bot_setSetting('PAY_CHAT_ID', chatId); bot_setSetting('PAY_THREAD_ID', thread); });
+    bot_log('ІНФО', 'bind payments', 'chat ' + chatId + ' thread ' + thread);
+    bot_sendToOwners('✅ Чат «' + bot_esc((msg.chat && msg.chat.title) || chatId) + '» підключено для оплат: повідомлення власника виду <code>+10 000</code>, <code>+15к</code> стануть оплатами. У тому чаті бот нічого не пише.');
+    return;
+  }
   if (what !== 'orders' && what !== 'report') {
-    var r0 = bot_send(chatId, 'Напишіть <code>/bind orders</code> (гілка замовлень) або <code>/bind report</code> (гілка звіту).', opts);
+    var r0 = bot_send(chatId, 'Напишіть <code>/bind orders</code> (гілка «Замовлення на клієнта»), <code>/bind registry</code> (гілка «Реєстри») або <code>/bind payments</code> (чат «Отправка отчет»).', opts);
     if (r0.ok) bot_scheduleDelete(chatId, r0.result.message_id, 15);
+    return;
+  }
+  var curGroup = bot_setting('GROUP_CHAT_ID');
+  if (curGroup && String(curGroup) !== String(chatId) && !/force/i.test(String(arg))) {          // захист: /bind в іншій групі мовчки зламав би прийом замовлень
+    bot_sendToOwners('⛔ Чат виробництва вже прив\'язано (' + curGroup + '), а це інша група (' + chatId + '). Щоб ПЕРЕНЕСТИ на цю групу, напишіть <code>/bind ' + what + ' force</code>.');
     return;
   }
   bot_withLock(function () {
@@ -373,7 +417,7 @@ function bot_cmdBind(msg, arg) {
     bot_setSetting(what === 'orders' ? 'ORDERS_THREAD_ID' : 'REPORT_THREAD_ID', thread);
   });
   bot_log('ІНФО', 'bind ' + what, 'chat ' + chatId + ' thread ' + thread);
-  var r = bot_send(chatId, '✅ Готово: ' + (what === 'orders' ? 'тут беру замовлення' : 'сюди надсилатиму ранковий звіт') + '.', opts);
+  var r = bot_send(chatId, '✅ Готово: ' + (what === 'orders' ? 'тут беру замовлення' : 'сюди надсилатиму реєстри й ранковий звіт') + '.', opts);
   if (r.ok) bot_scheduleDelete(chatId, r.result.message_id, 10);
 }
 
@@ -403,6 +447,12 @@ function bot_onCallback(cb) {
       case 'pay': case 'payy': case 'payn': case 'det': case 'cnc': case 'dsp': case 'rs': case 'rsy': case 'rsn':
       case 'sup': case 'opy': case 'opc': case 'opn': case 'undy': case 'undn':
         return bot_reconCallback(parts, ctx);
+      case 'aly': case 'aln':
+        return bot_allocCallback(parts, ctx);
+      case 'regy': case 'regn': case 'regx':
+        return bot_registryCallback(parts, ctx);
+      case 'nptq': case 'nptn':
+        return bot_npTestCallback(parts, ctx);
       case 'prcy': case 'prcn':
         return bot_priceCallback(parts, ctx);
       default:

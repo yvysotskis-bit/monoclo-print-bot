@@ -131,7 +131,7 @@ function bot_cellDate_(v) { return bot_isDate(v) ? v : null; }
 function bot_ordersSheet() { return bot_sheet(BOT_SHEETS.orders); }
 
 function bot_ordersMap(sheet) {
-  return bot_headerMap(sheet || bot_ordersSheet(), BOT_ORDER_COLS, ['arrived']);
+  return bot_headerMap(sheet || bot_ordersSheet(), BOT_ORDER_COLS, ['arrived', 'colorCode']);
 }
 
 function bot_orderFromRow_(r, map, rowNum) {
@@ -142,7 +142,7 @@ function bot_orderFromRow_(r, map, rowNum) {
     no: (no === '' || no === null) ? '' : (isNaN(Number(no)) ? bot_cellStr_(no) : Number(no)),
     date: bot_cellDate_(g('date')), print: bot_cellStr_(g('print')), type: bot_cellStr_(g('type')),
     color: bot_cellStr_(g('color')), size: bot_cellStr_(g('size')), placement: bot_cellStr_(g('placement')),
-    prints: Number(g('prints')) || 1, ttn: bot_normTtn(g('ttn')), ttnDate: bot_cellDate_(g('ttnDate')),
+    prints: Number(g('prints')) || 1, colorCode: Number(g('colorCode')) || 0, ttn: bot_normTtn(g('ttn')), ttnDate: bot_cellDate_(g('ttnDate')),
     stage: bot_cellStr_(g('stage')), npStatus: bot_cellStr_(g('npStatus')),
     cost: Number(g('cost')) || 0, status: bot_cellStr_(g('status')) || 'В роботі',
     paid: bot_cellStr_(g('paid')) || 'Не оплачено', paidDate: bot_cellDate_(g('paidDate')) || '',
@@ -367,6 +367,9 @@ function bot_formulaSep_(sheet) {
 
 /** Перетворює «англійську» формулу (з комами) під мову таблиці. Коми всередині "рядків" не чіпає. */
 function bot_fx(formula) {
+  if (!BOT_CACHE_.sep) {                                     // роздільник ще не визначали (напр. запис з імпорту) — визначаємо на службовому аркуші «Лог»
+    try { bot_formulaSep_(bot_ss().getSheetByName(BOT_SHEETS.log) || bot_ss().getSheets()[0]); } catch (e) { BOT_CACHE_.sep = ','; }
+  }
   if ((BOT_CACHE_.sep || ',') === ',') return formula;
   var out = '', inStr = false;
   for (var i = 0; i < formula.length; i++) {

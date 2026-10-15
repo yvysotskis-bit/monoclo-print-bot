@@ -13,7 +13,16 @@ var BOT_COMMANDS_ = [
   { command: 'files', description: 'Папка з файлами виробництва' },
   { command: 'price', description: 'Чинні ціни / нова ціна' },
   { command: 'report', description: 'Ранковий звіт зараз' },
-  { command: 'month', description: 'Місячний звіт' }
+  { command: 'month', description: 'Місячний звіт' },
+  { command: 'desc', description: 'Опис ТТН: /desc ТТН' },
+  { command: 'setdesc', description: 'Свій опис: /setdesc ТТН текст' },
+  { command: 'registry', description: 'Реєстр зараз / preview' },
+  { command: 'backfill', description: 'Описи для замовлень з таблиці' },
+  { command: 'addpay', description: 'Додати оплату: /addpay сума дата' },
+  { command: 'allocate', description: 'Які ТТН покривають оплати' },
+  { command: 'live', description: 'Бойовий режим запису в НП' },
+  { command: 'retry', description: 'Повторити ТТН з помилкою НП' },
+  { command: 'preview', description: 'Режим перевірки (нічого в НП)' }
 ];
 
 function onOpen() {
@@ -24,6 +33,10 @@ function onOpen() {
     .addSeparator()
     .addItem('Імпорт з попередньої версії', 'bot_menuImport')
     .addItem('Імпорт замовлень з експорту Telegram', 'bot_menuTgImport')
+    .addItem('«Виварене»: виправити тип і собівартість', 'bot_menuWashedFix')
+    .addItem('Імпорт оплат з експорту Telegram («Отправка отчет»)', 'bot_menuPayImport')
+    .addSeparator()
+    .addItem('Режим запису в НП: показати / бойовий / перевірка', 'bot_menuMode')
     .addSeparator()
     .addItem('Увімкнути бота', 'bot_menuEnable')
     .addItem('Вимкнути бота', 'bot_menuDisable')
@@ -197,6 +210,20 @@ function bot_healthChecks() {
   var st = bot_selfTest();
   add(st.failed === 0, 'Самоперевірка розбору замовлень: ' + st.passed + '/' + st.total);
   return out;
+}
+
+function bot_menuMode() {
+  var ui = bot_ui_();
+  var live = bot_npLive();
+  var r = ui.alert('Режим запису в Нову пошту',
+    'Зараз: ' + (live ? 'БОЙОВИЙ (опис пишеться в НП, реєстр створюється)' : 'ПЕРЕВІРКА (в НП нічого не пишеться)') + '.\n\n' +
+    (live ? 'Повернутись у режим перевірки?' : 'Перейти в бойовий режим? Це дозволено лише після успішної перевірки на тестовій ТТН (команда /nptest у боті).'),
+    ui.ButtonSet.YES_NO);
+  if (r !== ui.Button.YES) return;
+  if (live) { bot_setSetting('NP_MODE', 'перевірка'); bot_alert_('Готово', 'Режим перевірки.'); return; }
+  if (bot_prop(BOT_PROP.NP_TEST_OK) !== '1') { bot_alert_('Ще рано', 'Спершу перевірка на тестовій ТТН: у боті напишіть /nptest ТТН текст і підтвердіть кнопкою.'); return; }
+  bot_cmdLive(bot_ownerIds()[0]);
+  bot_alert_('Готово', 'Бойовий режим увімкнено.');
 }
 
 function bot_menuHealth() {

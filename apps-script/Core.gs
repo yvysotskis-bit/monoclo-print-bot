@@ -95,6 +95,7 @@ function bot_parseDate(v) {
     y = +m[1]; mo = +m[2]; d = +m[3]; h = +(m[4] || 0); mi = +(m[5] || 0); sec = +(m[6] || 0);
   }
   if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  if (new Date(Date.UTC(y, mo - 1, d)).getUTCDate() !== d) return null;             // 31.02 тощо — не існує
   var base = bot_makeDate(y, mo, d);
   return new Date(base.getTime() + ((h * 60 + mi) * 60 + sec) * 1000);
 }
@@ -184,7 +185,8 @@ function bot_normColor(text) {
   var t = bot_deLatin_(bot_trim(text).toLowerCase());
   if (/чорн/.test(t)) return 'Чорний';
   if (/біл/.test(t)) return 'Білий';
-  if (/сір|графіт/.test(t)) return 'Сірий';
+  if (/графіт/.test(t)) return 'Графітовий';
+  if (/сір/.test(t)) return 'Сірий';
   return '';
 }
 
@@ -197,6 +199,7 @@ function bot_parseTypeColor(text) {
   if (/[а-яіїєґ]/.test(t)) t = bot_deLatin_(t);            // змішані латиниця + кирилиця → кирилиця
   var res = { type: '', color: bot_normColor(t), ambiguous: false, found: false };
   if (/стік[еи]р\s*-?\s*пак/.test(t)) { res.type = 'Стікерпак'; res.found = true; res.color = ''; return res; }
+  if (/^кепк/.test(t)) { res.type = 'Кепка'; res.found = true; res.color = ''; return res; }
   if (/футболк/.test(t)) { res.type = 'Футболка'; res.found = true; return res; }
   if (/худі|худи/.test(t)) {
     res.found = true;
@@ -229,6 +232,9 @@ function bot_countPrints(printText) {
 // Розбір підпису замовлення з групи (розділ 4.2)
 // =====================================================================
 
+/** Код кольору: «x3» / «х3» / «×3» окремим словом (не «XL», не «2XL»). */
+var BOT_QTY_RE_ = /(^|\s)[xXхХ×]\s*(\d{1,2})(?=\s|$|[^\dA-Za-zА-Яа-яІіЇїЄєҐґ])/;
+
 var BOT_PREFIX_RE_ = /^[\s❗‼⚠️!]*(терміново[\s:!—\-]*)?/i;
 
 /** Рядок початку замовлення: «1538. Принт …», «1542 Принт …», «❗️ТЕРМІНОВО 1520. Принт …». → {no, rest} | null */
@@ -249,13 +255,22 @@ function bot_cleanLines_(text) {
 
 function bot_parseOrderSegment_(lines) {
   var st = bot_orderStart_(lines[0]);
+  // Усе в одному рядку: «15037. Принт no-risk (W) Худі x3 ❗️БЕЗ ФЛІСУ S» → назва принта + окремий рядок «Худі x3 ❗️БЕЗ ФЛІСУ S»
+  var inl = st.rest.match(/^(.+?)\s+((?:футболк\S*|худі|худи)(?:\s.*)?)$/i);
+  if (inl && !/^(стік|кепк)/i.test(st.rest) && !lines.slice(1).some(function (l) { return bot_parseTypeColor(l).found; })) {
+    st = { no: st.no, rest: inl[1].trim() };
+    lines = [lines[0], inl[2].trim()].concat(lines.slice(1));
+  }
   var res = {
     ok: true, no: st.no, print: st.rest, prints: bot_countPrints(st.rest), type: '', typeAmbiguous: false, color: '',
-    size: '', placement: '', ttn: '', issues: [], ttnShared: false
+    size: '', placement: '', ttn: '', issues: [], ttnShared: false, colorCode: 0, urgent: false
   };
   var badTtn = '', extras = [];
   for (var i = 1; i < lines.length; i++) {
     var line = lines[i];
+    var qm = line.match(BOT_QTY_RE_);                    // «x3», «х3» (латиниця й кирилиця) — КОД КОЛЬОРУ речі (не кількість!)
+    if (qm) { res.colorCode = parseInt(qm[2], 10); line = bot_trim(line.replace(BOT_QTY_RE_, '$1')); if (!line) continue; }
+    if (/(^|[^а-яіїєґ])два\s+принт/i.test(line)) { res.prints = 2; continue; }   // окремий рядок «ДВА ПРИНТА»
     var digits = line.replace(/[\s ]/g, '').replace(/^(ттн|тт|№)[:\-]?/i, '');
 
     if (/^\d{8,}$/.test(digits)) {                      // рядок із самих цифр — це ТТН
@@ -266,6 +281,7 @@ function bot_parseOrderSegment_(lines) {
     if (sz && !res.size && line.length <= 14) { res.size = sz; continue; }
 
     var tc = bot_parseTypeColor(line);
+    if (tc.found && !res.size) { var lastTok = line.split(/\s+/).pop(); if (line.split(/\s+/).length > 1) { var szT = bot_normSize(lastTok); if (szT) res.size = szT; } }   // розмір в кінці того ж рядка: «Худі x3 БЕЗ ФЛІСУ S»
     if (tc.found && !res.type && !res.typeAmbiguous) {
       if (tc.ambiguous) res.typeAmbiguous = true; else res.type = tc.type;
       if (tc.color) res.color = tc.color;
@@ -278,13 +294,24 @@ function bot_parseOrderSegment_(lines) {
     extras.push(line);                                  // напр. «FC BARCA (PERED) W - ПЕРЕД» — опис принта
   }
   if (!res.type && /стік[еи]р\s*-?\s*пак/i.test(bot_deLatin_(res.print.toLowerCase()))) res.type = 'Стікерпак';   // «1500. Стікерпак Ландо Норріс»
+  if (!res.type && /^кепк/i.test(bot_deLatin_(res.print.toLowerCase()))) res.type = 'Кепка';                          // «15100. Кепка Ferrari - 0132»
   if (/^принти?\s*$/i.test(res.print) && extras.length) res.print = res.print + ' ' + extras.join(' / ');
 
+  // «виварене» (будь-яка річ) — окремий тип з власною ціною: Худі виварене / Футболка виварена / Кепка виварена / Виварене
+  var washedTxt = (res.print + ' ' + lines.join(' ')).toLowerCase();
+  if (/виварен/.test(washedTxt) && res.type !== 'Стікерпак') {
+    if (res.type === 'Кепка') res.type = 'Кепка виварена';
+    else if (res.type === 'Футболка') res.type = 'Футболка виварена';
+    else if (res.type === 'Худі фліс' || res.type === 'Худі не утеплене' || res.typeAmbiguous) { res.type = 'Худі виварене'; res.typeAmbiguous = false; }
+    else if (!res.type) res.type = 'Виварене';
+  }
   if (!res.type) {
     res.issues.push({ field: 'type', text: res.typeAmbiguous ? 'Худі: не вказано «з флісом» чи «без флісу»' : 'не вказано вид речі (футболка / худі)' });
   }
   var noSz = BOT_NO_SIZE_COLOR_TYPES.indexOf(res.type) >= 0;
-  if (!res.color && !noSz) res.issues.push({ field: 'color', text: 'не вказано колір' });
+  if (!res.color && res.colorCode && BOT_COLOR_CODES[res.colorCode]) res.color = BOT_COLOR_CODES[res.colorCode];   // х1 чорний, х3 графітовий, х4 сірий
+  // колір обов'язковий лише для футболки: у повідомленнях склад не пише колір худі
+  if (!res.color && !noSz && res.type !== 'Худі фліс' && res.type !== 'Худі не утеплене' && res.type !== 'Худі виварене' && !res.typeAmbiguous) res.issues.push({ field: 'color', text: 'не вказано колір' });
   if (!res.size && !noSz) res.issues.push({ field: 'size', text: 'не вказано розмір' });
   if (!res.ttn) {
     res.issues.push({ field: 'ttn', text: badTtn ? 'ТТН «' + badTtn + '» — не 14 цифр' : 'немає ТТН' });
@@ -304,6 +331,7 @@ function bot_parseOrderMessage(text) {
     if (bot_orderStart_(l)) { cur = [l]; segs.push(cur); } else if (cur) cur.push(l);
   });
   var out = segs.map(bot_parseOrderSegment_);
+  if (/терміново/i.test(String(text))) out.forEach(function (o) { o.urgent = true; });   // «ТЕРМІНОВО» де завгодно в повідомленні
   for (var i = out.length - 2; i >= 0; i--) {           // спільна ТТН внизу діє на всі замовлення вище
     if (!out[i].ttn && out[i + 1].ttn) {
       out[i].ttn = out[i + 1].ttn; out[i].ttnShared = true;

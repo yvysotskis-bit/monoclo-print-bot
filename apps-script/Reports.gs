@@ -59,6 +59,10 @@ function bot_tickScheduled(startedMs) {
     bot_log('ІНФО', 'ранкове оновлення НП', r2.error ? r2.error : 'перевірено ' + r2.checked);
   }
 
+  // 3б) описи ТТН: перевірка / запис у НП (щохвилини), реєстр о REGISTRY_TIME (щодня)
+  try { bot_ttnProcess(); } catch (e) { bot_log('ПОМИЛКА', 'описи ТТН', e.message); }
+  if (hasNp) { try { bot_registryTick(now, minutes, today); } catch (e) { bot_log('ПОМИЛКА', 'реєстр (планувальник)', e.message); } }
+
   // 4) ранковий звіт
   if (dayOk && minutes >= reportMin && bot_prop(BOT_PROP.LAST_REPORT_DATE) !== today) {
     var done = bot_sendMorningReport();
@@ -155,9 +159,11 @@ function bot_sendStorageReportToOwners_() {
 
 function bot_sendMonthly_(chatId, y, m, silentOnEmpty) {
   var orders = bot_readOrders(), pays = bot_readPayments();
-  var cur = bot_monthMetrics(orders, pays, y, m);
+  var op = bot_openingFromSettings();
+  var redPct = parseFloat(String(bot_setting('PAY_RED_PERCENT', '10')).replace('%', '').replace(',', '.'));
+  var cur = bot_monthMetrics(orders, pays, y, m, op); cur.redPct = redPct;
   var pv = bot_prevYm(y, m);
-  var prev = bot_monthMetrics(orders, pays, pv.y, pv.m);
+  var prev = bot_monthMetrics(orders, pays, pv.y, pv.m, op);
   bot_sendMany(chatId, bot_splitText(bot_buildMonthReport(cur, prev), 3900));
   bot_withLock(function () {
     var sh = bot_sheet(BOT_SHEETS.monthly);
