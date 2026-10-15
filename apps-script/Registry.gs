@@ -29,17 +29,19 @@ function bot_regSelect(ttnRows, orders, fromNo) {
     var rowNos = bot_ttnOrderNos(r.orders);
     if (!rowNos.some(function (n) { return n > fromNo; })) return;           // старі — не наші
     var mine = orders.filter(function (o) { return o.ttn === r.ttn && o.msgId; });   // замовлення, прийняті з гілки
+    var threadEvidence = mine.length > 0 || (!!r.msgId && String(r.original).indexOf(r.ttn) >= 0);   // або сам рядок «ТТН» створено з повідомлення гілки, де є ця ТТН
     var reason = '';
     if (r.status === 'Чекає рішення') reason = 'чекає вашого рішення щодо опису';
     else if (r.status === 'Помилка НП') reason = 'помилка НП: ' + (r.note || '');
     else if (r.status === 'Новий') reason = 'опис ще не записаний у НП';
     else if (r.status === 'Перевірка') reason = 'режим перевірки';
     else if (r.status !== 'Записано в НП') reason = 'статус «' + r.status + '»';
-    else if (!mine.length) reason = 'немає повідомлення в гілці «Замовлення на клієнта» (відкинуто)';
-    else if (mine.every(function (o) { return o.status === 'Скасовано'; })) reason = 'усі замовлення скасовані';
+    else if (!threadEvidence) reason = 'немає повідомлення в гілці «Замовлення на клієнта» (відкинуто)';
+    else if (mine.length && mine.every(function (o) { return o.status === 'Скасовано'; })) reason = 'усі замовлення скасовані';
     if (reason) { excluded.push({ ttn: r.ttn, orders: r.orders, reason: reason, hard: r.status === 'Записано в НП' }); return; }
     include.push(r);
-    mine.forEach(function (o) { if (o.status !== 'Скасовано') nos.push(Number(o.no)); });
+    if (mine.length) mine.forEach(function (o) { if (o.status !== 'Скасовано') nos.push(Number(o.no)); });
+    else rowNos.forEach(function (n) { nos.push(n); });                                  // немає рядків у «Замовлення» — номери з рядка «ТТН»
   });
   return { include: include, excluded: excluded, orderNos: nos };
 }
@@ -103,6 +105,16 @@ function bot_npCreateScanSheet_(refs) {
   return { ref: d.Ref || d.ScanSheetRef || '', no: d.Number || '', ok: okList, errors: errList, raw: d };
 }
 
+/** Максимум ТТН в одному посиланні: UrlFetchApp обмежує довжину URL (~2 КБ), а одна ТТН у посиланні займає ≈ 28 символів. */
+var BOT_REG_CHUNK_ = 60;
+
+function bot_regChunks(ttns) {
+  var out = [];
+  for (var i = 0; i < ttns.length; i += BOT_REG_CHUNK_) out.push(ttns.slice(i, i + BOT_REG_CHUNK_));
+  return out;
+}
+
+/** PDF маркування для ОДНІЄЇ порції ТТН: основне посилання, потім запасне. */
 function bot_npDownloadMarking_(ttns) {
   var key = bot_prop(BOT_PROP.NP_KEY);
   var urls = [bot_regPrintUrl(ttns, key), bot_regPrintUrlAlt(ttns, key)], lastErr = '';
@@ -121,34 +133,47 @@ function bot_npDownloadMarking_(ttns) {
 
 // ---------- запуск ----------
 
-function bot_regCaption_(reg, now) {
-  return 'Реєстр №' + reg.no + ' · ' + reg.count + ' ТТН · ' + bot_fmtDM(now);
+function bot_regCaption_(reg, now, part, parts) {
+  return 'Реєстр №' + reg.no + ' · ' + reg.count + ' ТТН · ' + bot_fmtDM(now) + (parts > 1 ? ' · частина ' + part + '/' + parts : '');
 }
 
 function bot_regThread_() {
   return { chat: bot_setting('GROUP_CHAT_ID'), thread: bot_setting('REPORT_THREAD_ID') };
 }
 
+/**
+ * Надсилає PDF реєстру (одна ТТН-порція = один файл; зазвичай файл один). Прогрес зберігається в колонці «file_id PDF»
+ * (через кому): збій на 2-й порції не повторить надсилання 1-ї. Статус «Надіслано» — лише коли надіслано все.
+ */
 function bot_regSend_(reg, ttns, nos, now) {
   var dest = bot_regThread_();
   if (!dest.chat || dest.thread === '') throw new Error('не задано гілку «Реєстри» (/bind registry)');
-  var name = bot_regFileName(nos), res;
-  if (reg.fileId) res = bot_sendDocument(dest.chat, dest.thread, reg.fileId, bot_regCaption_(reg, now));
-  else {
-    var blob = bot_npDownloadMarking_(ttns).setName(name);
-    res = bot_sendDocument(dest.chat, dest.thread, blob, bot_regCaption_(reg, now));
+  var chunks = bot_regChunks(ttns), name = bot_regFileName(nos).replace(/\.pdf$/, '');
+  var fids = String(reg.fileId || '').split(',').filter(Boolean);
+  var resend = reg.status === 'Надіслано';                              // ручне повторне надсилання вже надісланого реєстру
+  for (var i = resend ? 0 : fids.length; i < chunks.length; i++) {
+    var caption = bot_regCaption_(reg, now, i + 1, chunks.length), res;
+    if (resend && fids[i]) res = bot_sendDocument(dest.chat, dest.thread, fids[i], caption);
+    else {
+      var blob = bot_npDownloadMarking_(chunks[i]).setName(chunks.length > 1 ? name + '_' + (i + 1) + '.pdf' : name + '.pdf');
+      res = bot_sendDocument(dest.chat, dest.thread, blob, caption);
+    }
+    if (!res.ok) throw new Error('Telegram: ' + res.description);
+    if (!resend) {
+      fids.push((res.result && res.result.document && res.result.document.file_id) || '');
+      bot_regWrite_(reg._row, { fileId: fids.join(',') });             // прогрес: уже надіслані порції
+    }
   }
-  if (!res.ok) throw new Error('Telegram: ' + res.description);
-  var fid = res.result && res.result.document && res.result.document.file_id;
-  bot_regWrite_(reg._row, { status: 'Надіслано', fileId: fid || reg.fileId || '' });
-  return fid;
+  if (!resend) bot_regWrite_(reg._row, { status: 'Надіслано', fileId: fids.join(',') });
+  return fids.join(',');
 }
 
 /** Номери замовлень (для назви файлу) за списком ТТН: усі нескасовані замовлення цих ТТН. */
 function bot_regOrderNos_(ttns) {
   var set = {}; ttns.forEach(function (t) { set[t] = true; });
-  var nos = [];
-  bot_readOrders().forEach(function (o) { if (set[o.ttn] && o.status !== 'Скасовано' && o.no) nos.push(Number(o.no)); });
+  var nos = [], have = {};
+  bot_readOrders().forEach(function (o) { if (set[o.ttn] && o.status !== 'Скасовано' && o.no) { nos.push(Number(o.no)); have[o.ttn] = true; } });
+  bot_readTtnRows().forEach(function (r) { if (set[r.ttn] && !have[r.ttn]) bot_ttnOrderNos(r.orders).forEach(function (n) { nos.push(n); }); });   // ТТН без рядків у «Замовлення»
   return nos;
 }
 

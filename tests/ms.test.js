@@ -591,3 +591,60 @@ test('PDF маркування: посилання без «[]» (UrlFetchApp), 
   env.update(cb(q.reply_markup.inline_keyboard[0][0].callback_data, q.message_id)); env.poll();
   assert.equal(env.scans.length, 1); assert.equal(groupDocs(env).length, 1);
 });
+
+test('№ повторно опубліковано з ТТН (перше повідомлення без ТТН) → ТТН прив\'язується, ТТН потрапляє в реєстр; № з іншою ТТН — алерт, але нова ТТН теж у реєстрі', () => {
+  const env = liveEnv(); const c = env.ctx;
+  env.docs['20451559352851'] = npDoc('20451559352851'); env.docs['20451531176866'] = npDoc('20451531176866');
+  env.update(groupMsg('15121. Принт vers sign (W)\nХуді х3 БЕЗ ФЛІСУ\nL\nПринт позаду\n20451560155636 ЗМІНИЛИ ТТН')); env.poll();
+  assert.equal(c.bot_readOrders()[0].ttn, '');
+  env.update(groupMsg('15121. Принт vers sign (W)\nХуді х3 БЕЗ ФЛІСУ\nL\nПринт позаду\n\n20451559352851')); env.poll();
+  assert.equal(c.bot_readOrders().length, 1); assert.equal(c.bot_readOrders()[0].ttn, '20451559352851');     // прив'язано, дубля рядка немає
+  // той самий № в іншому повідомленні з ІНШОЮ ТТН: рядок не змінюємо, алерт, але нова ТТН має опис і потрапляє в реєстр
+  env.update(groupMsg('15122. Принт A\nФутболка чорна\nM\nПринт позаду\n\n20451531176866')); env.poll();
+  env.update(groupMsg('15122. Принт B\nФутболка біла\nM\nПринт позаду\n\n20451531046639')); env.poll();
+  assert.ok(env.sentTo(OWNER).some(s => /номер замовлення вже використаний/.test(s.text)));
+  const sel = c.bot_regSelect(ttnRows(env).map(r => Object.assign({}, r, { status: 'Записано в НП' })), c.bot_readOrders(), 15088);
+  assert.ok(sel.include.some(r => r.ttn === '20451559352851'));
+  assert.ok(sel.include.some(r => r.ttn === '20451531046639'), 'ТТН без рядка в «Замовлення», але з повідомленням у гілці — не відкидається');
+  assert.ok(sel.orderNos.includes(15122));
+  // «чужа» ТТН (рядок без повідомлення) — як і раніше відкидається
+  c.bot_ttnAppend({ ttn: '20451999999990', orders: '15300', original: 'x', desc: 'x', len: 1, status: 'Записано в НП', msgId: '5' });
+  const sel2 = c.bot_regSelect(ttnRows(env).map(r => Object.assign({}, r, { status: 'Записано в НП' })), c.bot_readOrders(), 15088);
+  assert.ok(sel2.excluded.some(x => x.ttn === '20451999999990'));
+});
+
+test('PDF реєстру: >60 ТТН → кілька файлів (ліміт довжини URL), прогрес зберігається, збій 2-ї порції не дублює 1-шу, повторний запуск не створює другий реєстр', () => {
+  const env = liveEnv(); const c = env.ctx;
+  const many = Array.from({ length: 130 }, (_, i) => '2045' + String(1560000000 + i).padStart(10, '0'));
+  many.forEach((t, i) => { env.docs[t] = npDoc(t); c.bot_ttnAppend({ ttn: t, orders: String(16000 + i), original: 'x ' + t, desc: String(16000 + i), len: 5, status: 'Записано в НП', msgId: String(i + 1) }); c.bot_appendOrderRow({ no: 16000 + i, date: c.bot_makeDate(2026, 10, 7), print: 'A', type: 'Футболка', color: 'Чорний', size: 'M', placement: 'Позаду', prints: 1, ttn: t, cost: 420, status: 'В роботі', paid: 'Не оплачено', msgId: String(i + 1) }, []); });
+  const urls = [];
+  const orig = env.np.handler;
+  assert.ok(c.bot_regChunks(many).length === 3);
+  c.bot_regChunks(many).forEach(ch => assert.ok(c.bot_regPrintUrl(ch, 'K'.repeat(40)).length < 2000, 'URL коротший за ліміт'));
+  // збій відправки 2-го файлу
+  let sends = 0; const realFetch = env.ctx.UrlFetchApp.fetch;
+  env.ctx.UrlFetchApp.fetch = (u, o) => { if (/sendDocument/.test(u) && ++sends === 2) throw new Error('мережа'); return realFetch(u, o); };
+  env.setNow('2026-10-07T07:00:00Z'); env.poll();
+  assert.equal(env.scans.length, 1); assert.equal(groupDocs(env).length, 1);               // 1-ша порція вже надіслана
+  assert.equal(env.sheet('Реєстри').getRange(2, 7).getValue(), 'Створено');
+  env.ctx.UrlFetchApp.fetch = realFetch;
+  env.poll();                                                                              // наступна хвилина: лише 2-га і 3-тя, без другого реєстру
+  assert.equal(env.scans.length, 1); assert.equal(groupDocs(env).length, 3);
+  assert.equal(env.sheet('Реєстри').getRange(2, 7).getValue(), 'Надіслано');
+  assert.match(groupDocs(env)[2].caption, /частина 3\/3/);
+  assert.match(groupDocs(env)[0].document.name, /_1\.pdf$/);
+});
+
+test('Дата зрізу в налаштуваннях: текст і справжня дата (Google міг перетворити клітинку) — однаково; довжина опису — в UTF-16', () => {
+  const env = fresh(); const c = env.ctx;
+  c.bot_setSetting('OPENING_DEBT', '100');
+  c.bot_setSetting('OPENING_ORDERS_AFTER', '31.08.2026'); c.bot_setSetting('OPENING_PAYS_AFTER', '08.09.2026');
+  const t = c.bot_openingFromSettings();
+  const sh = env.sheet('Налаштування'), rows = sh.getDataRange().getValues();
+  const r = rows.findIndex(x => x[0] === 'OPENING_ORDERS_AFTER') + 1;
+  sh.getRange(r, 2).setValue(new Date(Date.UTC(2026, 7, 30, 21, 0)));                    // 31.08 00:00 за Києвом = 21:00 UTC 30.08 → клітинка-дата
+  c.bot_settingsMap(); delete c.BOT_CACHE_.settings;
+  const d = c.bot_openingFromSettings();
+  assert.equal(c.bot_dayKey(d.ordersAfter), c.bot_dayKey(t.ordersAfter));
+  assert.equal(c.bot_len('😀'), 2); assert.equal(c.bot_len('Привіт'), 6);
+});

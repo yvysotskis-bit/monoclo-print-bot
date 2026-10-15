@@ -1771,8 +1771,17 @@ function bot_handleOrderMessage(msg, caption, edited) {
         bot_log('ІНФО', 'повтор замовлення №' + p.no, 'та сама ТТН — проігноровано');
         return;
       }
+      if (dup.length && !dup[0].ttn && p.ttn && dup[0].status !== 'Скасовано') {   // ТТН дописали окремим повідомленням (перше було без ТТН) — прив'язуємо до наявного рядка
+        bot_patchOrders([{ row: dup[0]._row, fields: { ttn: p.ttn, stage: '', npStatus: '', ttnDate: '', handoff: '', arrived: '' } }]);
+        bot_clearYellow(dup[0]._row, ['ttn']);
+        BOT_NEW_TTN_ROWS_.push(dup[0]._row);
+        dup[0].ttn = p.ttn;
+        bot_sendToOwners('ℹ️ ТТН ' + bot_code(p.ttn) + ' дописано до замовлення №' + p.no + ' (воно було без ТТН).' + linkTxt);
+        if (react !== '✍') react = '👌';
+        return;
+      }
       if (dup.length) {
-        bot_sendToOwners('⚠️ Дубль: замовлення №' + p.no + ' уже є в таблиці (рядок ' + dup[0]._row + '). Новий рядок не додаю.' + linkTxt);
+        bot_sendToOwners('⚠️ Дубль: замовлення №' + p.no + ' уже є в таблиці (рядок ' + dup[0]._row + (dup[0].ttn && p.ttn && dup[0].ttn !== p.ttn ? ', ТТН там ' + dup[0].ttn + ', а в цьому повідомленні ' + p.ttn + ' — номер замовлення вже використаний, рядок не змінюю' : '') + '). Новий рядок не додаю.' + linkTxt);
         return;
       }
       var b = bot_buildOrderFields_(p, orderDate, priceRows, 'В роботі');
@@ -1905,7 +1914,8 @@ function bot_priceCallback(parts, ctx) {
 
 var BOT_DESC_LIMIT_DEFAULT = 100;
 
-function bot_len(s) { return Array.from(String(s)).length; }       // кирилиця = 1 символ, емодзі = 1
+/** Довжина для ліміту НП: рахуємо в одиницях UTF-16 (кирилиця = 1; емодзі = 2) — це не менше, ніж у кодових точок, тож ліміт гарантовано дотримано за будь-якого способу підрахунку НП. */
+function bot_len(s) { return String(s).length; }
 
 // ---------- назва принта ----------
 
@@ -2512,7 +2522,14 @@ function bot_openingFromSettings() {
   var raw = bot_setting('OPENING_DEBT', '');
   var debt = bot_toNumber(raw);
   if (raw === '' || !isFinite(debt)) return null;
-  return { debt: debt, ordersAfter: bot_parseDate(bot_setting('OPENING_ORDERS_AFTER', '')), paysAfter: bot_parseDate(bot_setting('OPENING_PAYS_AFTER', '')) };
+  return { debt: debt, ordersAfter: bot_settingDate_('OPENING_ORDERS_AFTER'), paysAfter: bot_settingDate_('OPENING_PAYS_AFTER') };
+}
+
+/** Дата з налаштувань: підходить і текст «31.08.2026», і справжня дата (якщо Google перетворив клітинку на дату). */
+function bot_settingDate_(key) {
+  var raw = bot_settingsMap()[key];
+  if (bot_isDate(raw)) return bot_makeDateFrom_(raw);
+  return bot_parseDate(bot_setting(key, ''));
 }
 
 function bot_afterCut_(d, cut) {
@@ -4168,17 +4185,19 @@ function bot_regSelect(ttnRows, orders, fromNo) {
     var rowNos = bot_ttnOrderNos(r.orders);
     if (!rowNos.some(function (n) { return n > fromNo; })) return;           // старі — не наші
     var mine = orders.filter(function (o) { return o.ttn === r.ttn && o.msgId; });   // замовлення, прийняті з гілки
+    var threadEvidence = mine.length > 0 || (!!r.msgId && String(r.original).indexOf(r.ttn) >= 0);   // або сам рядок «ТТН» створено з повідомлення гілки, де є ця ТТН
     var reason = '';
     if (r.status === 'Чекає рішення') reason = 'чекає вашого рішення щодо опису';
     else if (r.status === 'Помилка НП') reason = 'помилка НП: ' + (r.note || '');
     else if (r.status === 'Новий') reason = 'опис ще не записаний у НП';
     else if (r.status === 'Перевірка') reason = 'режим перевірки';
     else if (r.status !== 'Записано в НП') reason = 'статус «' + r.status + '»';
-    else if (!mine.length) reason = 'немає повідомлення в гілці «Замовлення на клієнта» (відкинуто)';
-    else if (mine.every(function (o) { return o.status === 'Скасовано'; })) reason = 'усі замовлення скасовані';
+    else if (!threadEvidence) reason = 'немає повідомлення в гілці «Замовлення на клієнта» (відкинуто)';
+    else if (mine.length && mine.every(function (o) { return o.status === 'Скасовано'; })) reason = 'усі замовлення скасовані';
     if (reason) { excluded.push({ ttn: r.ttn, orders: r.orders, reason: reason, hard: r.status === 'Записано в НП' }); return; }
     include.push(r);
-    mine.forEach(function (o) { if (o.status !== 'Скасовано') nos.push(Number(o.no)); });
+    if (mine.length) mine.forEach(function (o) { if (o.status !== 'Скасовано') nos.push(Number(o.no)); });
+    else rowNos.forEach(function (n) { nos.push(n); });                                  // немає рядків у «Замовлення» — номери з рядка «ТТН»
   });
   return { include: include, excluded: excluded, orderNos: nos };
 }
@@ -4242,6 +4261,16 @@ function bot_npCreateScanSheet_(refs) {
   return { ref: d.Ref || d.ScanSheetRef || '', no: d.Number || '', ok: okList, errors: errList, raw: d };
 }
 
+/** Максимум ТТН в одному посиланні: UrlFetchApp обмежує довжину URL (~2 КБ), а одна ТТН у посиланні займає ≈ 28 символів. */
+var BOT_REG_CHUNK_ = 60;
+
+function bot_regChunks(ttns) {
+  var out = [];
+  for (var i = 0; i < ttns.length; i += BOT_REG_CHUNK_) out.push(ttns.slice(i, i + BOT_REG_CHUNK_));
+  return out;
+}
+
+/** PDF маркування для ОДНІЄЇ порції ТТН: основне посилання, потім запасне. */
 function bot_npDownloadMarking_(ttns) {
   var key = bot_prop(BOT_PROP.NP_KEY);
   var urls = [bot_regPrintUrl(ttns, key), bot_regPrintUrlAlt(ttns, key)], lastErr = '';
@@ -4260,34 +4289,47 @@ function bot_npDownloadMarking_(ttns) {
 
 // ---------- запуск ----------
 
-function bot_regCaption_(reg, now) {
-  return 'Реєстр №' + reg.no + ' · ' + reg.count + ' ТТН · ' + bot_fmtDM(now);
+function bot_regCaption_(reg, now, part, parts) {
+  return 'Реєстр №' + reg.no + ' · ' + reg.count + ' ТТН · ' + bot_fmtDM(now) + (parts > 1 ? ' · частина ' + part + '/' + parts : '');
 }
 
 function bot_regThread_() {
   return { chat: bot_setting('GROUP_CHAT_ID'), thread: bot_setting('REPORT_THREAD_ID') };
 }
 
+/**
+ * Надсилає PDF реєстру (одна ТТН-порція = один файл; зазвичай файл один). Прогрес зберігається в колонці «file_id PDF»
+ * (через кому): збій на 2-й порції не повторить надсилання 1-ї. Статус «Надіслано» — лише коли надіслано все.
+ */
 function bot_regSend_(reg, ttns, nos, now) {
   var dest = bot_regThread_();
   if (!dest.chat || dest.thread === '') throw new Error('не задано гілку «Реєстри» (/bind registry)');
-  var name = bot_regFileName(nos), res;
-  if (reg.fileId) res = bot_sendDocument(dest.chat, dest.thread, reg.fileId, bot_regCaption_(reg, now));
-  else {
-    var blob = bot_npDownloadMarking_(ttns).setName(name);
-    res = bot_sendDocument(dest.chat, dest.thread, blob, bot_regCaption_(reg, now));
+  var chunks = bot_regChunks(ttns), name = bot_regFileName(nos).replace(/\.pdf$/, '');
+  var fids = String(reg.fileId || '').split(',').filter(Boolean);
+  var resend = reg.status === 'Надіслано';                              // ручне повторне надсилання вже надісланого реєстру
+  for (var i = resend ? 0 : fids.length; i < chunks.length; i++) {
+    var caption = bot_regCaption_(reg, now, i + 1, chunks.length), res;
+    if (resend && fids[i]) res = bot_sendDocument(dest.chat, dest.thread, fids[i], caption);
+    else {
+      var blob = bot_npDownloadMarking_(chunks[i]).setName(chunks.length > 1 ? name + '_' + (i + 1) + '.pdf' : name + '.pdf');
+      res = bot_sendDocument(dest.chat, dest.thread, blob, caption);
+    }
+    if (!res.ok) throw new Error('Telegram: ' + res.description);
+    if (!resend) {
+      fids.push((res.result && res.result.document && res.result.document.file_id) || '');
+      bot_regWrite_(reg._row, { fileId: fids.join(',') });             // прогрес: уже надіслані порції
+    }
   }
-  if (!res.ok) throw new Error('Telegram: ' + res.description);
-  var fid = res.result && res.result.document && res.result.document.file_id;
-  bot_regWrite_(reg._row, { status: 'Надіслано', fileId: fid || reg.fileId || '' });
-  return fid;
+  if (!resend) bot_regWrite_(reg._row, { status: 'Надіслано', fileId: fids.join(',') });
+  return fids.join(',');
 }
 
 /** Номери замовлень (для назви файлу) за списком ТТН: усі нескасовані замовлення цих ТТН. */
 function bot_regOrderNos_(ttns) {
   var set = {}; ttns.forEach(function (t) { set[t] = true; });
-  var nos = [];
-  bot_readOrders().forEach(function (o) { if (set[o.ttn] && o.status !== 'Скасовано' && o.no) nos.push(Number(o.no)); });
+  var nos = [], have = {};
+  bot_readOrders().forEach(function (o) { if (set[o.ttn] && o.status !== 'Скасовано' && o.no) { nos.push(Number(o.no)); have[o.ttn] = true; } });
+  bot_readTtnRows().forEach(function (r) { if (set[r.ttn] && !have[r.ttn]) bot_ttnOrderNos(r.orders).forEach(function (n) { nos.push(n); }); });   // ТТН без рядків у «Замовлення»
   return nos;
 }
 
@@ -4965,7 +5007,7 @@ function bot_buildSummary() {
   sh.getRange('A4:E4').setValues([['Собівартість усього', 'Оплачено усього', 'БОРГ', 'Остання оплата — дата', 'Остання оплата — сума']]);
   // Початковий залишок (аркуш «Налаштування»): входить у собівартість; замовлення/оплати до дат зрізу вже в ньому
   function S(key) { return 'VLOOKUP("' + key + '",\'' + BOT_SHEETS.settings + '\'!$A$2:$B$60,2,FALSE)'; }
-  function D(key) { return 'IFERROR(DATE(VALUE(MID(' + S(key) + ',7,4)),VALUE(MID(' + S(key) + ',4,2)),VALUE(LEFT(' + S(key) + ',2))),0)'; }
+  function D(key) { return 'IFERROR(IF(ISNUMBER(' + S(key) + '),' + S(key) + ',DATE(VALUE(MID(' + S(key) + ',7,4)),VALUE(MID(' + S(key) + ',4,2)),VALUE(LEFT(' + S(key) + ',2)))),0)'; }   // і текст «31.08.2026», і справжня дата
   sh.getRange('G4').setValue('Початковий залишок').setFontColor('#999999');
   sh.getRange('H4').setFormula(bot_fx('=IFERROR(VALUE(' + S('OPENING_DEBT') + '),0)')).setNumberFormat(money).setFontColor('#999999');
   sh.getRange('G5').setValue('Замовлення після').setFontColor('#999999');

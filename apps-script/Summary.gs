@@ -44,7 +44,7 @@ function bot_buildSummary() {
   sh.getRange('A4:E4').setValues([['Собівартість усього', 'Оплачено усього', 'БОРГ', 'Остання оплата — дата', 'Остання оплата — сума']]);
   // Початковий залишок (аркуш «Налаштування»): входить у собівартість; замовлення/оплати до дат зрізу вже в ньому
   function S(key) { return 'VLOOKUP("' + key + '",\'' + BOT_SHEETS.settings + '\'!$A$2:$B$60,2,FALSE)'; }
-  function D(key) { return 'IFERROR(DATE(VALUE(MID(' + S(key) + ',7,4)),VALUE(MID(' + S(key) + ',4,2)),VALUE(LEFT(' + S(key) + ',2))),0)'; }
+  function D(key) { return 'IFERROR(IF(ISNUMBER(' + S(key) + '),' + S(key) + ',DATE(VALUE(MID(' + S(key) + ',7,4)),VALUE(MID(' + S(key) + ',4,2)),VALUE(LEFT(' + S(key) + ',2)))),0)'; }   // і текст «31.08.2026», і справжня дата
   sh.getRange('G4').setValue('Початковий залишок').setFontColor('#999999');
   sh.getRange('H4').setFormula(bot_fx('=IFERROR(VALUE(' + S('OPENING_DEBT') + '),0)')).setNumberFormat(money).setFontColor('#999999');
   sh.getRange('G5').setValue('Замовлення після').setFontColor('#999999');

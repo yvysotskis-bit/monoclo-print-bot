@@ -120,8 +120,17 @@ function bot_handleOrderMessage(msg, caption, edited) {
         bot_log('ІНФО', 'повтор замовлення №' + p.no, 'та сама ТТН — проігноровано');
         return;
       }
+      if (dup.length && !dup[0].ttn && p.ttn && dup[0].status !== 'Скасовано') {   // ТТН дописали окремим повідомленням (перше було без ТТН) — прив'язуємо до наявного рядка
+        bot_patchOrders([{ row: dup[0]._row, fields: { ttn: p.ttn, stage: '', npStatus: '', ttnDate: '', handoff: '', arrived: '' } }]);
+        bot_clearYellow(dup[0]._row, ['ttn']);
+        BOT_NEW_TTN_ROWS_.push(dup[0]._row);
+        dup[0].ttn = p.ttn;
+        bot_sendToOwners('ℹ️ ТТН ' + bot_code(p.ttn) + ' дописано до замовлення №' + p.no + ' (воно було без ТТН).' + linkTxt);
+        if (react !== '✍') react = '👌';
+        return;
+      }
       if (dup.length) {
-        bot_sendToOwners('⚠️ Дубль: замовлення №' + p.no + ' уже є в таблиці (рядок ' + dup[0]._row + '). Новий рядок не додаю.' + linkTxt);
+        bot_sendToOwners('⚠️ Дубль: замовлення №' + p.no + ' уже є в таблиці (рядок ' + dup[0]._row + (dup[0].ttn && p.ttn && dup[0].ttn !== p.ttn ? ', ТТН там ' + dup[0].ttn + ', а в цьому повідомленні ' + p.ttn + ' — номер замовлення вже використаний, рядок не змінюю' : '') + '). Новий рядок не додаю.' + linkTxt);
         return;
       }
       var b = bot_buildOrderFields_(p, orderDate, priceRows, 'В роботі');

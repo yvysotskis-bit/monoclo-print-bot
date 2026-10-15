@@ -408,7 +408,14 @@ function bot_openingFromSettings() {
   var raw = bot_setting('OPENING_DEBT', '');
   var debt = bot_toNumber(raw);
   if (raw === '' || !isFinite(debt)) return null;
-  return { debt: debt, ordersAfter: bot_parseDate(bot_setting('OPENING_ORDERS_AFTER', '')), paysAfter: bot_parseDate(bot_setting('OPENING_PAYS_AFTER', '')) };
+  return { debt: debt, ordersAfter: bot_settingDate_('OPENING_ORDERS_AFTER'), paysAfter: bot_settingDate_('OPENING_PAYS_AFTER') };
+}
+
+/** Дата з налаштувань: підходить і текст «31.08.2026», і справжня дата (якщо Google перетворив клітинку на дату). */
+function bot_settingDate_(key) {
+  var raw = bot_settingsMap()[key];
+  if (bot_isDate(raw)) return bot_makeDateFrom_(raw);
+  return bot_parseDate(bot_setting(key, ''));
 }
 
 function bot_afterCut_(d, cut) {
