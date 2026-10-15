@@ -38,7 +38,7 @@ test('Налаштування: усі аркуші, заголовки за Т�
   assert.deepEqual(env.rows('Прайс').map(r => r.slice(0, 2)), [['Футболка', 420], ['Худі фліс', 740], ['Худі не утеплене', 740], ['Стікерпак', 0], ['Кепка', 0]]);
   env.setup();                                           // повторний запуск нічого не ламає і не дублює
   assert.equal(env.rows('Прайс').length, 5);
-  assert.equal(env.sheet('Налаштування').getLastRow(), 18);
+  assert.equal(env.sheet('Налаштування').getLastRow(), 21);
 });
 
 test('Приймання: повідомлення 1538 → рядок за ≤1 хв, 👌; файл принта і «++++++» ігноруються', () => {
@@ -665,7 +665,7 @@ test('Формули «Підсумків» працюють і в таблиц�
     assert.ok(formulas.length > 80);
     const bare = f => f.replace(/"[^"]*"/g, '');
     assert.ok(formulas.every(f => semi ? !bare(f).includes(',') : !bare(f).includes(';')), 'роздільник semi=' + semi);
-    assert.match(env.sheet('Підсумки').getRange('A5').getValue(), /^=SUM\(/);
+    assert.match(env.sheet('Підсумки').getRange('A5').getValue(), /^=\$H\$4\+SUM\(/);
     const countifs = formulas.find(f => f.startsWith('=COUNTIFS('));
     assert.ok(countifs.includes(semi ? ';' : ','));
     assert.ok(!formulas.some(f => /9\.99/.test(f)), 'без десяткових чисел у формулах');

@@ -239,3 +239,27 @@ test('C: вікно дат getDocumentList менше трьох місяців 
   const days = (d(w.to) - d(w.from)) / 86400000;
   assert.ok(days > 30 && days < 88, String(days));
 });
+
+test('Початковий залишок 2 227 020 (на 31.08, оплати по 08.09 включно): борг = залишок + нові замовлення − нові оплати', () => {
+  const env = newEnv({});
+  env.setup();
+  const c = env.ctx;
+  c.bot_setSetting('OPENING_DEBT', '2227020'); c.bot_setSetting('OPENING_ORDERS_AFTER', '31.08.2026'); c.bot_setSetting('OPENING_PAYS_AFTER', '08.09.2026');
+  const op = c.bot_openingFromSettings();
+  assert.equal(op.debt, 2227020);
+  const d = (y, m, dd) => c.bot_makeDate(y, m, dd);
+  const orders = [{ date: d(2026, 8, 30), cost: 1000 }, { date: d(2026, 9, 1), cost: 740 }, { date: d(2026, 9, 10), cost: 420, ttn: '', status: 'В роботі' }];
+  const pays = [{ date: d(2026, 9, 8), sum: 564835 }, { date: d(2026, 9, 9), sum: 100000 }];
+  const r = c.bot_computeDebt(orders, pays, op);
+  assert.equal(r.debt, 2227020 + 740 + 420 - 100000);      // 30.08 і оплата 08.09 — уже в залишку, вдруге не рахуються
+  assert.equal(r.opening, 2227020);
+  // без налаштування — як було
+  assert.equal(c.bot_computeDebt(orders, pays).debt, 1000 + 740 + 420 - 564835 - 100000);
+  // /borg показує залишок
+  env.props.TG_TOKEN = '123:ABCDEFGHIJKLMNOPQRSTUVWXYZ'; c.bot_setSetting('OWNER_IDS', '111');
+  c.bot_cmdBorg(111);
+  assert.match(env.lastSent().text, /2\s?227\s?020/);
+  // місячний звіт: борг на кінець вересня включає залишок
+  const m = c.bot_monthMetrics(orders, pays, 2026, 9, op);
+  assert.equal(m.debtEnd, 2227020 + 740 + 420 - 100000);
+});

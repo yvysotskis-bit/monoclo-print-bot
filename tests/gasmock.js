@@ -158,7 +158,7 @@ function newEnv(opts) {
   env.run = (code) => vm.runInContext(code, ctx);
   env.sheet = (n) => ss.getSheetByName(n);
   env.rows = (n) => { const s = ss.getSheetByName(n); const v = s.getDataRange().getValues(); return v.slice(1).filter(r => r.some(x => x !== '')); };
-  env.setup = () => { ctx.bot_setupAll(); };
+  env.setup = () => { ctx.bot_setupAll(); ctx.bot_setSetting('OPENING_DEBT', ''); };   // у тестах Монокло початковий залишок вимкнено
   let uid = 1;
   env.update = (u) => { u.update_id = uid++; tg.pending.push(u); return u; };
   env.poll = () => { ctx.bot_poll(); };

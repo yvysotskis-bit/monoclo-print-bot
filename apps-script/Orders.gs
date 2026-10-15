@@ -192,9 +192,9 @@ function bot_cmdCancel(chatId, arg) {
 
 function bot_cmdBorg(chatId) {
   var orders = bot_readOrders(), pays = bot_readPayments();
-  var d = bot_computeDebt(orders, pays);
+  var d = bot_computeDebt(orders, pays, bot_openingFromSettings());
   bot_send(chatId, '💰 <b>Борг: ' + bot_fmtMoney(d.debt) + '</b>\n' +
-    'Собівартість усього: ' + bot_fmtMoney(d.cost) + '\n' +
+    'Собівартість усього: ' + bot_fmtMoney(d.cost) + (d.opening ? ' (разом із початковим залишком ' + bot_fmtMoney(d.opening) + ')' : '') + '\n' +
     'Оплачено: ' + bot_fmtMoney(d.paid) + ' (оплат: ' + pays.length + ')\n\n' +
     'Отримані/відмовлені, але ще не оплачені ТТН: <b>' + d.unpaidDelivered.count + '</b> — ' + bot_fmtMoney(d.unpaidDelivered.sum));
 }

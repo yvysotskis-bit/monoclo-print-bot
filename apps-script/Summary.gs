@@ -38,8 +38,18 @@ function bot_buildSummary() {
   sh.getRange('A1').setValue('Монокло — Виробництво 2026 · Підсумки').setFontSize(16).setFontWeight('bold');
   sh.getRange('A2').setValue('Усе рахується автоматично з аркушів «Замовлення» і «Оплати». Цей аркуш не редагуйте.').setFontColor('#666666');
   sh.getRange('A4:E4').setValues([['Собівартість усього', 'Оплачено усього', 'БОРГ', 'Остання оплата — дата', 'Остання оплата — сума']]);
-  sh.getRange('A5').setFormula(bot_fx('=SUM(' + R('cost') + ')'));
-  sh.getRange('B5').setFormula(bot_fx('=SUM(' + P('sum') + ')'));
+  // Початковий залишок (аркуш «Налаштування»): входить у собівартість; замовлення/оплати до дат зрізу вже в ньому
+  function S(key) { return 'VLOOKUP("' + key + '",\'' + BOT_SHEETS.settings + '\'!$A$2:$B$60,2,FALSE)'; }
+  function D(key) { return 'IFERROR(DATE(VALUE(MID(' + S(key) + ',7,4)),VALUE(MID(' + S(key) + ',4,2)),VALUE(LEFT(' + S(key) + ',2))),0)'; }
+  sh.getRange('G4').setValue('Початковий залишок').setFontColor('#999999');
+  sh.getRange('H4').setFormula(bot_fx('=IFERROR(VALUE(' + S('OPENING_DEBT') + '),0)')).setNumberFormat(money).setFontColor('#999999');
+  sh.getRange('G5').setValue('Замовлення після').setFontColor('#999999');
+  sh.getRange('H5').setFormula(bot_fx('=' + D('OPENING_ORDERS_AFTER'))).setNumberFormat('dd.mm.yyyy').setFontColor('#999999');
+  sh.getRange('G6').setValue('Оплати після').setFontColor('#999999');
+  sh.getRange('H6').setFormula(bot_fx('=' + D('OPENING_PAYS_AFTER'))).setNumberFormat('dd.mm.yyyy').setFontColor('#999999');
+  sh.getRange('A6').setFormula(bot_fx('=IF($H$4>0,"У собівартість і борг входить початковий залишок "&TEXT($H$4,"# ##0")&" грн (борг станом на 31.08.2026 з оплатами по 08.09.2026 включно)","")')).setFontColor('#666666').setFontStyle('italic');
+  sh.getRange('A5').setFormula(bot_fx('=$H$4+SUM(' + R('cost') + ')-IF($H$5>0,SUMIFS(' + R('cost') + ',' + R('date') + ',"<="&$H$5),0)'));
+  sh.getRange('B5').setFormula(bot_fx('=SUM(' + P('sum') + ')-IF($H$6>0,SUMIFS(' + P('sum') + ',' + P('date') + ',"<="&$H$6),0)'));
   sh.getRange('C5').setFormula(bot_fx('=A5-B5'));
   // остання заповнена оплата в стовпці «Сума оплати»
   sh.getRange('D5').setFormula(bot_fx('=IFERROR(INDEX(' + P('date') + ',COUNT(' + P('sum') + ')),"")'));

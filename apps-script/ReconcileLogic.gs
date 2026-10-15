@@ -400,9 +400,28 @@ function bot_planCostUpdate(orders, fileSum, reconId) {
 }
 
 /** Підсумок боргу: собівартість усього − оплати; неоплачені, але вже доставлені ТТН. */
-function bot_computeDebt(orders, payments) {
-  var cost = bot_sumBy_(orders, function (o) { return Number(o.cost) || 0; });
-  var paid = bot_sumBy_(payments, function (p) { return Number(p.sum) || 0; });
+/**
+ * opening (необов'язково) = {debt, ordersAfter:Date|null, paysAfter:Date|null}: початковий залишок боргу.
+ * Він додається до собівартості; замовлення з датою ≤ ordersAfter і оплати з датою ≤ paysAfter вже в ньому — не рахуємо вдруге.
+ */
+function bot_openingFromSettings() {
+  var raw = bot_setting('OPENING_DEBT', '');
+  var debt = bot_toNumber(raw);
+  if (raw === '' || !isFinite(debt)) return null;
+  return { debt: debt, ordersAfter: bot_parseDate(bot_setting('OPENING_ORDERS_AFTER', '')), paysAfter: bot_parseDate(bot_setting('OPENING_PAYS_AFTER', '')) };
+}
+
+function bot_afterCut_(d, cut) {
+  if (!cut) return true;
+  if (!bot_isDate(d)) return true;
+  return bot_dayNum(d) > bot_dayNum(cut);
+}
+
+function bot_computeDebt(orders, payments, opening) {
+  var ordersC = opening ? orders.filter(function (o) { return bot_afterCut_(o.date, opening.ordersAfter); }) : orders;
+  var paysC = opening ? payments.filter(function (p) { return bot_afterCut_(p.date, opening.paysAfter); }) : payments;
+  var cost = bot_sumBy_(ordersC, function (o) { return Number(o.cost) || 0; }) + (opening ? opening.debt : 0);
+  var paid = bot_sumBy_(paysC, function (p) { return Number(p.sum) || 0; });
   var groups = {};
   orders.forEach(function (o) {
     if (!o.ttn || o.paid === 'Оплачено' || o.status !== 'В роботі') return;
@@ -411,7 +430,7 @@ function bot_computeDebt(orders, payments) {
   });
   var keys = Object.keys(groups);
   return {
-    cost: cost, paid: paid, debt: bot_round2(cost - paid),
+    cost: cost, paid: paid, debt: bot_round2(cost - paid), opening: opening ? opening.debt : 0,
     unpaidDelivered: { count: keys.length, sum: bot_sumBy_(keys, function (k) { return bot_sumBy_(groups[k], function (o) { return Number(o.cost) || 0; }); }) }
   };
 }

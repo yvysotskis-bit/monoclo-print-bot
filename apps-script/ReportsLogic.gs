@@ -194,7 +194,7 @@ function bot_topPrints(rows, n) {
 }
 
 /** Цифри за календарний місяць (y, m). payments: [{date, sum}] */
-function bot_monthMetrics(orders, payments, y, m) {
+function bot_monthMetrics(orders, payments, y, m, opening) {
   var monthStartN = Math.round(Date.UTC(y, m - 1, 1) / 86400000);
   var nextStartN = Math.round(Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, 1) / 86400000);
   var rows = orders.filter(function (o) { return o.status === 'В роботі' && bot_inMonth_(bot_rowMonthDate_(o), y, m); });
@@ -203,17 +203,19 @@ function bot_monthMetrics(orders, payments, y, m) {
   rows.forEach(function (o) { if (byType[o.type] !== undefined) byType[o.type]++; else if (o.type === 'Стікерпак') stickers++; });
   var cost = bot_sumBy_(rows, function (o) { return Number(o.cost) || 0; });
   var paid = bot_sumBy_(payments.filter(function (p) { return bot_inMonth_(p.date, y, m); }), function (p) { return Number(p.sum) || 0; });
-  var costToEnd = bot_sumBy_(orders, function (o) {
+  var ordersD = opening ? orders.filter(function (o) { return bot_afterCut_(bot_rowMonthDate_(o), opening.ordersAfter); }) : orders;   // раніші — вже в початковому залишку
+  var paysD = opening ? payments.filter(function (p) { return bot_afterCut_(p.date, opening.paysAfter); }) : payments;
+  var costToEnd = bot_sumBy_(ordersD, function (o) {
     var d = bot_rowMonthDate_(o);
     return (!d || bot_dayNum(d) < nextStartN) ? (Number(o.cost) || 0) : 0;
   });
-  var paidToEnd = bot_sumBy_(payments, function (p) { return (bot_isDate(p.date) && bot_dayNum(p.date) >= nextStartN) ? 0 : (Number(p.sum) || 0); });
+  var paidToEnd = bot_sumBy_(paysD, function (p) { return (bot_isDate(p.date) && bot_dayNum(p.date) >= nextStartN) ? 0 : (Number(p.sum) || 0); });
   var refusals = rows.filter(function (o) { return o.stage === 'Відмова'; });
   var finals = rows.filter(function (o) { return o.stage === 'Відмова' || o.stage === 'Отримано'; });
   var speed = bot_computeSpeed(orders, new Date(monthStartN * 86400000 + 12 * 3600000), new Date(nextStartN * 86400000 + 12 * 3600000));
   return {
     y: y, m: m, items: rows.length, byType: byType, stickers: stickers, cost: cost, paid: paid,
-    debtEnd: bot_round2(costToEnd - paidToEnd),
+    debtEnd: bot_round2(costToEnd - paidToEnd + (opening && opening.paysAfter && nextStartN > bot_dayNum(opening.paysAfter) ? opening.debt : 0)),
     refusals: refusals.length, refusalsSum: bot_sumBy_(refusals, function (o) { return Number(o.cost) || 0; }),
     refusalPct: finals.length ? Math.round(refusals.length / finals.length * 1000) / 10 : 0,
     top: bot_topPrints(rows, 10), speed: speed

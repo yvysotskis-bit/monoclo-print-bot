@@ -159,9 +159,10 @@ function bot_sendStorageReportToOwners_() {
 
 function bot_sendMonthly_(chatId, y, m, silentOnEmpty) {
   var orders = bot_readOrders(), pays = bot_readPayments();
-  var cur = bot_monthMetrics(orders, pays, y, m);
+  var op = bot_openingFromSettings();
+  var cur = bot_monthMetrics(orders, pays, y, m, op);
   var pv = bot_prevYm(y, m);
-  var prev = bot_monthMetrics(orders, pays, pv.y, pv.m);
+  var prev = bot_monthMetrics(orders, pays, pv.y, pv.m, op);
   bot_sendMany(chatId, bot_splitText(bot_buildMonthReport(cur, prev), 3900));
   bot_withLock(function () {
     var sh = bot_sheet(BOT_SHEETS.monthly);

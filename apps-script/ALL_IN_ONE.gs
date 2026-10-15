@@ -169,6 +169,9 @@ var BOT_DEFAULT_SETTINGS = [
   ['NP_SENDER_PHONE', '', 'Телефон відправника (необов\'язково): тоді НП повертає ім\'я і телефон отримувача'],
   ['MONTHLY_REPORT', 'так', 'Місячний звіт 1-го числа: так / ні'],
   ['REACTIONS', 'так', 'Ставити реакцію 👌 на прийняте замовлення: так / ні'],
+  ['OPENING_DEBT', '2227020', 'Початковий залишок боргу, грн (борг станом на 31.08.2026 з урахуванням оплат по 08.09.2026 включно). Порожньо — не враховувати'],
+  ['OPENING_ORDERS_AFTER', '31.08.2026', 'У собівартість беруться замовлення з датою ПІСЛЯ цієї (раніші вже в початковому залишку)'],
+  ['OPENING_PAYS_AFTER', '08.09.2026', 'В оплати беруться платежі з датою ПІСЛЯ цієї (до неї включно — вже в початковому залишку)'],
   ['DESC_LIMIT', '100', 'Максимум символів в описі ТТН (Додаткова інформація в Новій пошті)'],
   ['DESC_FROM_ORDER', '15088', 'Описи й реєстр — лише для ТТН, де є замовлення з номером БІЛЬШЕ за це (старіші бот не чіпає)'],
   ['NP_MODE', 'перевірка', 'Режим запису в Нову пошту: «перевірка» (нічого не пишемо, лише надсилаємо власнику) або «бойовий»'],
@@ -1782,9 +1785,9 @@ function bot_cmdCancel(chatId, arg) {
 
 function bot_cmdBorg(chatId) {
   var orders = bot_readOrders(), pays = bot_readPayments();
-  var d = bot_computeDebt(orders, pays);
+  var d = bot_computeDebt(orders, pays, bot_openingFromSettings());
   bot_send(chatId, '💰 <b>Борг: ' + bot_fmtMoney(d.debt) + '</b>\n' +
-    'Собівартість усього: ' + bot_fmtMoney(d.cost) + '\n' +
+    'Собівартість усього: ' + bot_fmtMoney(d.cost) + (d.opening ? ' (разом із початковим залишком ' + bot_fmtMoney(d.opening) + ')' : '') + '\n' +
     'Оплачено: ' + bot_fmtMoney(d.paid) + ' (оплат: ' + pays.length + ')\n\n' +
     'Отримані/відмовлені, але ще не оплачені ТТН: <b>' + d.unpaidDelivered.count + '</b> — ' + bot_fmtMoney(d.unpaidDelivered.sum));
 }
@@ -2415,9 +2418,28 @@ function bot_planCostUpdate(orders, fileSum, reconId) {
 }
 
 /** Підсумок боргу: собівартість усього − оплати; неоплачені, але вже доставлені ТТН. */
-function bot_computeDebt(orders, payments) {
-  var cost = bot_sumBy_(orders, function (o) { return Number(o.cost) || 0; });
-  var paid = bot_sumBy_(payments, function (p) { return Number(p.sum) || 0; });
+/**
+ * opening (необов'язково) = {debt, ordersAfter:Date|null, paysAfter:Date|null}: початковий залишок боргу.
+ * Він додається до собівартості; замовлення з датою ≤ ordersAfter і оплати з датою ≤ paysAfter вже в ньому — не рахуємо вдруге.
+ */
+function bot_openingFromSettings() {
+  var raw = bot_setting('OPENING_DEBT', '');
+  var debt = bot_toNumber(raw);
+  if (raw === '' || !isFinite(debt)) return null;
+  return { debt: debt, ordersAfter: bot_parseDate(bot_setting('OPENING_ORDERS_AFTER', '')), paysAfter: bot_parseDate(bot_setting('OPENING_PAYS_AFTER', '')) };
+}
+
+function bot_afterCut_(d, cut) {
+  if (!cut) return true;
+  if (!bot_isDate(d)) return true;
+  return bot_dayNum(d) > bot_dayNum(cut);
+}
+
+function bot_computeDebt(orders, payments, opening) {
+  var ordersC = opening ? orders.filter(function (o) { return bot_afterCut_(o.date, opening.ordersAfter); }) : orders;
+  var paysC = opening ? payments.filter(function (p) { return bot_afterCut_(p.date, opening.paysAfter); }) : payments;
+  var cost = bot_sumBy_(ordersC, function (o) { return Number(o.cost) || 0; }) + (opening ? opening.debt : 0);
+  var paid = bot_sumBy_(paysC, function (p) { return Number(p.sum) || 0; });
   var groups = {};
   orders.forEach(function (o) {
     if (!o.ttn || o.paid === 'Оплачено' || o.status !== 'В роботі') return;
@@ -2426,7 +2448,7 @@ function bot_computeDebt(orders, payments) {
   });
   var keys = Object.keys(groups);
   return {
-    cost: cost, paid: paid, debt: bot_round2(cost - paid),
+    cost: cost, paid: paid, debt: bot_round2(cost - paid), opening: opening ? opening.debt : 0,
     unpaidDelivered: { count: keys.length, sum: bot_sumBy_(keys, function (k) { return bot_sumBy_(groups[k], function (o) { return Number(o.cost) || 0; }); }) }
   };
 }
@@ -4085,7 +4107,7 @@ function bot_topPrints(rows, n) {
 }
 
 /** Цифри за календарний місяць (y, m). payments: [{date, sum}] */
-function bot_monthMetrics(orders, payments, y, m) {
+function bot_monthMetrics(orders, payments, y, m, opening) {
   var monthStartN = Math.round(Date.UTC(y, m - 1, 1) / 86400000);
   var nextStartN = Math.round(Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, 1) / 86400000);
   var rows = orders.filter(function (o) { return o.status === 'В роботі' && bot_inMonth_(bot_rowMonthDate_(o), y, m); });
@@ -4094,17 +4116,19 @@ function bot_monthMetrics(orders, payments, y, m) {
   rows.forEach(function (o) { if (byType[o.type] !== undefined) byType[o.type]++; else if (o.type === 'Стікерпак') stickers++; });
   var cost = bot_sumBy_(rows, function (o) { return Number(o.cost) || 0; });
   var paid = bot_sumBy_(payments.filter(function (p) { return bot_inMonth_(p.date, y, m); }), function (p) { return Number(p.sum) || 0; });
-  var costToEnd = bot_sumBy_(orders, function (o) {
+  var ordersD = opening ? orders.filter(function (o) { return bot_afterCut_(bot_rowMonthDate_(o), opening.ordersAfter); }) : orders;   // раніші — вже в початковому залишку
+  var paysD = opening ? payments.filter(function (p) { return bot_afterCut_(p.date, opening.paysAfter); }) : payments;
+  var costToEnd = bot_sumBy_(ordersD, function (o) {
     var d = bot_rowMonthDate_(o);
     return (!d || bot_dayNum(d) < nextStartN) ? (Number(o.cost) || 0) : 0;
   });
-  var paidToEnd = bot_sumBy_(payments, function (p) { return (bot_isDate(p.date) && bot_dayNum(p.date) >= nextStartN) ? 0 : (Number(p.sum) || 0); });
+  var paidToEnd = bot_sumBy_(paysD, function (p) { return (bot_isDate(p.date) && bot_dayNum(p.date) >= nextStartN) ? 0 : (Number(p.sum) || 0); });
   var refusals = rows.filter(function (o) { return o.stage === 'Відмова'; });
   var finals = rows.filter(function (o) { return o.stage === 'Відмова' || o.stage === 'Отримано'; });
   var speed = bot_computeSpeed(orders, new Date(monthStartN * 86400000 + 12 * 3600000), new Date(nextStartN * 86400000 + 12 * 3600000));
   return {
     y: y, m: m, items: rows.length, byType: byType, stickers: stickers, cost: cost, paid: paid,
-    debtEnd: bot_round2(costToEnd - paidToEnd),
+    debtEnd: bot_round2(costToEnd - paidToEnd + (opening && opening.paysAfter && nextStartN > bot_dayNum(opening.paysAfter) ? opening.debt : 0)),
     refusals: refusals.length, refusalsSum: bot_sumBy_(refusals, function (o) { return Number(o.cost) || 0; }),
     refusalPct: finals.length ? Math.round(refusals.length / finals.length * 1000) / 10 : 0,
     top: bot_topPrints(rows, 10), speed: speed
@@ -4322,9 +4346,10 @@ function bot_sendStorageReportToOwners_() {
 
 function bot_sendMonthly_(chatId, y, m, silentOnEmpty) {
   var orders = bot_readOrders(), pays = bot_readPayments();
-  var cur = bot_monthMetrics(orders, pays, y, m);
+  var op = bot_openingFromSettings();
+  var cur = bot_monthMetrics(orders, pays, y, m, op);
   var pv = bot_prevYm(y, m);
-  var prev = bot_monthMetrics(orders, pays, pv.y, pv.m);
+  var prev = bot_monthMetrics(orders, pays, pv.y, pv.m, op);
   bot_sendMany(chatId, bot_splitText(bot_buildMonthReport(cur, prev), 3900));
   bot_withLock(function () {
     var sh = bot_sheet(BOT_SHEETS.monthly);
@@ -4393,8 +4418,18 @@ function bot_buildSummary() {
   sh.getRange('A1').setValue('Монокло — Виробництво 2026 · Підсумки').setFontSize(16).setFontWeight('bold');
   sh.getRange('A2').setValue('Усе рахується автоматично з аркушів «Замовлення» і «Оплати». Цей аркуш не редагуйте.').setFontColor('#666666');
   sh.getRange('A4:E4').setValues([['Собівартість усього', 'Оплачено усього', 'БОРГ', 'Остання оплата — дата', 'Остання оплата — сума']]);
-  sh.getRange('A5').setFormula(bot_fx('=SUM(' + R('cost') + ')'));
-  sh.getRange('B5').setFormula(bot_fx('=SUM(' + P('sum') + ')'));
+  // Початковий залишок (аркуш «Налаштування»): входить у собівартість; замовлення/оплати до дат зрізу вже в ньому
+  function S(key) { return 'VLOOKUP("' + key + '",\'' + BOT_SHEETS.settings + '\'!$A$2:$B$60,2,FALSE)'; }
+  function D(key) { return 'IFERROR(DATE(VALUE(MID(' + S(key) + ',7,4)),VALUE(MID(' + S(key) + ',4,2)),VALUE(LEFT(' + S(key) + ',2))),0)'; }
+  sh.getRange('G4').setValue('Початковий залишок').setFontColor('#999999');
+  sh.getRange('H4').setFormula(bot_fx('=IFERROR(VALUE(' + S('OPENING_DEBT') + '),0)')).setNumberFormat(money).setFontColor('#999999');
+  sh.getRange('G5').setValue('Замовлення після').setFontColor('#999999');
+  sh.getRange('H5').setFormula(bot_fx('=' + D('OPENING_ORDERS_AFTER'))).setNumberFormat('dd.mm.yyyy').setFontColor('#999999');
+  sh.getRange('G6').setValue('Оплати після').setFontColor('#999999');
+  sh.getRange('H6').setFormula(bot_fx('=' + D('OPENING_PAYS_AFTER'))).setNumberFormat('dd.mm.yyyy').setFontColor('#999999');
+  sh.getRange('A6').setFormula(bot_fx('=IF($H$4>0,"У собівартість і борг входить початковий залишок "&TEXT($H$4,"# ##0")&" грн (борг станом на 31.08.2026 з оплатами по 08.09.2026 включно)","")')).setFontColor('#666666').setFontStyle('italic');
+  sh.getRange('A5').setFormula(bot_fx('=$H$4+SUM(' + R('cost') + ')-IF($H$5>0,SUMIFS(' + R('cost') + ',' + R('date') + ',"<="&$H$5),0)'));
+  sh.getRange('B5').setFormula(bot_fx('=SUM(' + P('sum') + ')-IF($H$6>0,SUMIFS(' + P('sum') + ',' + P('date') + ',"<="&$H$6),0)'));
   sh.getRange('C5').setFormula(bot_fx('=A5-B5'));
   // остання заповнена оплата в стовпці «Сума оплати»
   sh.getRange('D5').setFormula(bot_fx('=IFERROR(INDEX(' + P('date') + ',COUNT(' + P('sum') + ')),"")'));
