@@ -194,6 +194,8 @@ function bot_cmdCancel(chatId, arg) {
       return { row: o._row, fields: { status: 'Скасовано', cost: 0, note: (o.note ? o.note + '; ' : '') + 'Скасовано /cancel, було ' + bot_fmtNum(o.cost) + ' грн' } };
     });
     bot_patchOrders(patches);
+    var cancelTtns = []; rows.forEach(function (o) { if (o.ttn && cancelTtns.indexOf(o.ttn) < 0) cancelTtns.push(o.ttn); });
+    try { bot_ttnAfterCancel(cancelTtns); } catch (e) { bot_log('ПОМИЛКА', 'ТТН після /cancel', e.message); }
     bot_log('ІНФО', 'cancel №' + no, rows.length + ' рядків');
     bot_send(chatId, '✅ Замовлення №' + no + ' скасовано (рядків: ' + rows.length + '), собівартість 0.');
   });

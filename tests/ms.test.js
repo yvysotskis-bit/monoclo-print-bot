@@ -648,3 +648,106 @@ test('Дата зрізу в налаштуваннях: текст і спра�
   assert.equal(c.bot_dayKey(d.ordersAfter), c.bot_dayKey(t.ordersAfter));
   assert.equal(c.bot_len('😀'), 2); assert.equal(c.bot_len('Привіт'), 6);
 });
+
+// ---------- аудит: сценарії відмов і повторів ----------
+const msgIdOf = (u) => u.message.message_id;
+
+test('Аудит: ТТН у повідомленні замінили/прибрали редагуванням → стара ТТН знімається (не пишеться в НП, не йде в реєстр)', () => {
+  const env = liveEnv(); const c = env.ctx;
+  env.docs[T2] = npDoc(T2);
+  const u = env.update(groupMsg(`15100. Принт A\nФутболка чорна\nM\nПринт позаду\n\n${T1}`)); env.poll();
+  assert.equal(ttnRows(env)[0].status, 'Записано в НП');
+  env.update(edit(msgIdOf(u), `15100. Принт A\nФутболка чорна\nM\nПринт позаду\n\n${T2}`)); env.poll();
+  const rows = ttnRows(env);
+  assert.equal(rows.find(r => r.ttn === T1).status, 'Знято');
+  env.setNow('2026-10-07T07:00:00Z'); env.poll();
+  assert.deepEqual([...env.scans[0].DocumentRefs], ['ref-' + T2]);                         // у реєстрі лише актуальна ТТН
+  // ТТН прибрали зовсім
+  const env2 = liveEnv(); env2.docs[T1] = npDoc(T1);
+  const u2 = env2.update(groupMsg(`15101. Принт A\nФутболка чорна\nM\nПринт позаду\n\n${T1}`)); env2.poll();
+  env2.update(edit(msgIdOf(u2), `15101. Принт A\nФутболка чорна\nM\nПринт позаду`)); env2.poll();
+  assert.equal(ttnRows(env2)[0].status, 'Знято');
+  env2.setNow('2026-10-07T07:00:00Z'); env2.poll();
+  assert.equal((env2.scans || []).length, 0);
+});
+
+test('Аудит: друге повідомлення з тією ж ТТН і новими замовленнями → опис об\'єднується; /cancel перераховує або знімає ТТН', () => {
+  const env = liveEnv(); const c = env.ctx;
+  env.update(groupMsg(`15100. Принт A\nФутболка чорна\nM\nПринт позаду\n\n${T1}`)); env.poll();
+  env.update(groupMsg(`15101. Принт B\nФутболка біла\nL\nПринт позаду\n\n${T1}`)); env.poll();
+  const r = ttnRows(env)[0];
+  assert.equal(r.orders, '15100, 15101'); assert.ok(r.desc.includes('15101') && r.desc.includes('15100'));
+  assert.equal(env.docs[T1].AdditionalInformation.includes('15101'), true);                // і в НП оновлено
+  env.props.TG_TOKEN = '123:ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  c.bot_cmdCancel(OWNER, '15101'); env.poll();
+  assert.ok(!ttnRows(env)[0].desc.includes('15101'));
+  c.bot_cmdCancel(OWNER, '15100'); env.poll();
+  assert.equal(ttnRows(env)[0].status, 'Знято');
+  env.setNow('2026-10-07T07:00:00Z'); env.poll();
+  assert.equal((env.scans || []).length, 0);
+});
+
+test('Аудит: НП не пишемо для ТТН без повідомлення в гілці (backfill без msgId, ручні рядки)', () => {
+  const env = liveEnv(); const c = env.ctx;
+  c.bot_appendOrderRow({ no: 15300, date: c.bot_makeDate(2026, 10, 7), print: 'A', type: 'Футболка', color: 'Чорний', size: 'M', placement: 'Позаду', prints: 1, ttn: T1, cost: 420, status: 'В роботі', paid: 'Не оплачено', msgId: '' }, []);
+  assert.equal(c.bot_ttnBackfill().added, 0);                                              // замовлення без msgId — не з гілки
+  c.bot_ttnAppend({ ttn: T2, orders: '15301', original: 'x', desc: '15301 test', len: 10, status: 'Новий', msgId: '3' });   // «ручний» рядок, ТТН у тексті відсутня
+  env.poll();
+  assert.ok(!(env.updates || []).length);                                                  // update у НП не викликався
+  assert.equal(ttnRows(env).find(r => r.ttn === T2).status, 'Помилка НП');
+  assert.match(ttnRows(env).find(r => r.ttn === T2).note, /⛔/);
+});
+
+test('Аудит: /setdesc ТТН - для відновленої з таблиці ТТН перебудовує з замовлень, а не лишає порожній опис', () => {
+  const env = liveEnv(); const c = env.ctx;
+  c.bot_appendOrderRow({ no: 15300, date: c.bot_makeDate(2026, 10, 7), print: 'Принт A', type: 'Футболка', color: 'Чорний', size: 'M', placement: 'Позаду', prints: 1, ttn: T1, cost: 420, status: 'В роботі', paid: 'Не оплачено', msgId: '77' }, []);
+  c.bot_ttnBackfill();
+  env.props.TG_TOKEN = '123:ABCDEFGHIJKLMNOPQRSTUVWXYZ'; c.bot_setSetting('OWNER_IDS', String(OWNER));
+  c.bot_cmdSetDesc(OWNER, T1 + ' мій текст');
+  c.bot_cmdSetDesc(OWNER, T1 + ' -');
+  assert.equal(ttnRows(env)[0].desc, '15300 A футболка чорна M, принт позаду');
+});
+
+test('Аудит: НП «Internal error» — тимчасова (повтор), недійсний ключ — не «Помилка НП»; ⏳-рядки не займають чергу; /retry пропускає ⛔', () => {
+  const env = liveEnv(); const c = env.ctx;
+  env.docs[T1] = npDoc(T1);
+  env.np.fail = 'Internal server error';
+  assert.equal(c.bot_npWriteDesc(T1, 'x').state, 'transient');
+  env.np.fail = 'API key is invalid';
+  const rk = c.bot_npWriteDesc(T1, 'x'); assert.equal(rk.state, 'transient'); assert.match(rk.error, /ключ API/);
+  env.np.fail = 'Weight is invalid';
+  assert.equal(c.bot_npWriteDesc(T1, 'x').state, 'error');                                 // справжня відмова — остаточна
+  env.np.fail = null;
+  c.bot_ttnAppend({ ttn: T1, orders: '15200', original: 'x ' + T1, desc: '15200 a', len: 7, status: 'Помилка НП', note: '⛔ Після запису змінились інші поля: Cost', msgId: '1' });
+  c.bot_ttnAppend({ ttn: T2, orders: '15201', original: 'x ' + T2, desc: '15201 a', len: 7, status: 'Помилка НП', note: 'DateTime…', msgId: '2' });
+  env.props.TG_TOKEN = '123:ABCDEFGHIJKLMNOPQRSTUVWXYZ'; c.bot_setSetting('OWNER_IDS', String(OWNER));
+  c.bot_cmdRetry(OWNER, '');
+  assert.equal(ttnRows(env).find(r => r.ttn === T2).status, 'Новий'); assert.equal(ttnRows(env).find(r => r.ttn === T1).status, 'Помилка НП');
+  c.bot_cmdRetry(OWNER, T1 + ' force');
+  assert.equal(ttnRows(env).find(r => r.ttn === T1).status, 'Новий');
+});
+
+test('Аудит: реєстр — збій позначки ТТН після створення в НП не дає другого реєстру; «зависший» реєстр не блокує наступні; паралельний запуск ігнорується', () => {
+  const env = liveEnv(); const c = env.ctx;
+  env.update(groupMsg(MSG2)); env.poll();
+  const realPatch = c.bot_ttnPatch; let boom = 1;
+  c.bot_ttnPatch = (p) => { if (p.length && p[0].fields && p[0].fields.registry && boom-- > 0) throw new Error('quota'); return realPatch(p); };
+  env.setNow('2026-10-07T07:00:00Z'); env.poll();                                          // створено в НП, але позначка не записалась
+  assert.equal(env.scans.length, 1);
+  c.bot_ttnPatch = realPatch;
+  env.poll();                                                                              // наступна хвилина: відновлення без другого реєстру
+  assert.equal(env.scans.length, 1); assert.equal(ttnRows(env)[0].registry, '105-0001'); assert.equal(groupDocs(env).length, 1);
+  // паралельний запуск
+  env.props.REGISTRY_RUN_TS = String(Date.now());
+  assert.equal(c.bot_registryRun({ manual: true, force: true }).done, false);
+  delete env.props.REGISTRY_RUN_TS;
+  // зависший реєстр: PDF не вдається 3 дні → позначається «Помилка», наступний реєстр створюється
+  const env2 = liveEnv(); env2.np.printBad = true;
+  env2.update(groupMsg(MSG2)); env2.poll();
+  env2.setNow('2026-10-07T07:00:00Z'); env2.poll(); env2.poll(); env2.poll();
+  assert.equal(env2.sheet('Реєстри').getRange(2, 7).getValue(), 'Помилка');
+  env2.np.printBad = false; env2.docs[T1] = npDoc(T1);
+  env2.update(groupMsg(MSG1)); env2.setNow('2026-10-08T07:00:00Z'); env2.poll(); env2.poll();
+  assert.equal(env2.scans.length, 2);                                                      // новий реєстр створено, не заблокований старим
+  assert.equal(env2.sheet('Реєстри').getRange(3, 7).getValue(), 'Надіслано');
+});

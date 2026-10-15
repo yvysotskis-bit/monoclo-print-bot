@@ -25,11 +25,11 @@ function bot_regFileName(nos) { return bot_regRange(nos) + '.pdf'; }
 function bot_regSelect(ttnRows, orders, fromNo) {
   var include = [], excluded = [], nos = [];
   ttnRows.forEach(function (r) {
-    if (r.registry) return;                                                  // уже в реєстрі
+    if (r.registry || r.status === 'Знято') return;                          // уже в реєстрі / знято (ТТН прибрано чи замінено в повідомленні, усі замовлення скасовано)
     var rowNos = bot_ttnOrderNos(r.orders);
     if (!rowNos.some(function (n) { return n > fromNo; })) return;           // старі — не наші
     var mine = orders.filter(function (o) { return o.ttn === r.ttn && o.msgId; });   // замовлення, прийняті з гілки
-    var threadEvidence = mine.length > 0 || (!!r.msgId && String(r.original).indexOf(r.ttn) >= 0);   // або сам рядок «ТТН» створено з повідомлення гілки, де є ця ТТН
+    var threadEvidence = bot_ttnThreadEvidence_(r, orders);                  // замовлення з гілки з цією ТТН або сам рядок «ТТН» створено з повідомлення гілки
     var reason = '';
     if (r.status === 'Чекає рішення') reason = 'чекає вашого рішення щодо опису';
     else if (r.status === 'Помилка НП') reason = 'помилка НП: ' + (r.note || '');
@@ -152,7 +152,7 @@ function bot_regSend_(reg, ttns, nos, now) {
   var fids = String(reg.fileId || '').split(',').filter(Boolean);
   var resend = reg.status === 'Надіслано';                              // ручне повторне надсилання вже надісланого реєстру
   for (var i = resend ? 0 : fids.length; i < chunks.length; i++) {
-    var caption = bot_regCaption_(reg, now, i + 1, chunks.length), res;
+    var caption = bot_regCaption_(reg, reg.date || now, i + 1, chunks.length), res;
     if (resend && fids[i]) res = bot_sendDocument(dest.chat, dest.thread, fids[i], caption);
     else {
       var blob = bot_npDownloadMarking_(chunks[i]).setName(chunks.length > 1 ? name + '_' + (i + 1) + '.pdf' : name + '.pdf');
@@ -181,7 +181,15 @@ function bot_regOrderNos_(ttns) {
  * Основний запуск. opts: {manual:true — запит власника}.
  * @return {done:boolean, text?:повідомлення для власника (ручний запуск)}; scheduled → тиша, якщо немає ТТН.
  */
+/** Захист від паралельного запуску (два тригери поспіль, ручний + запланований): другий нічого не робить, поки перший не завершився (до 5 хв). */
 function bot_registryRun(opts) {
+  var ts = Number(bot_prop('REGISTRY_RUN_TS') || 0);
+  if (ts && Date.now() - ts < 300000) return { done: false, text: 'Реєстр уже формується — зачекайте хвилину.' };
+  bot_setProp('REGISTRY_RUN_TS', Date.now());
+  try { return bot_registryRun_(opts); } finally { bot_delProp('REGISTRY_RUN_TS'); }
+}
+
+function bot_registryRun_(opts) {
   opts = opts || {};
   var now = new Date(), today = bot_dayKey(now);
   if (!bot_npLive()) return { done: true, text: 'Режим перевірки: реєстр не створюю (це запис у НП). Після <code>/live</code> — працюватиму.' };
@@ -219,13 +227,17 @@ function bot_registryRun(opts) {
     ttns = used.map(function (u) { return u.ttn; });
     nos = bot_regOrderNos_(ttns);
     if (failed.length) bot_sendToOwners('⚠️ НП не додала в реєстр: ' + bot_esc(failed.join('; ')) + ' — ці ТТН залишились на наступний раз.');
-    reg = { date: now, no: created.no, ref: created.ref, range: bot_regRange(nos), count: ttns.length, status: 'Створено', ttns: ttns.join(', ') };
-    reg._row = bot_regWrite_(null, reg);
-    bot_ttnPatch(used.map(function (u) { return { row: u._row, fields: { registry: created.no } }; }));
+    var regNo = created.no || ('без-№-' + bot_fmtDate(now) + '-' + String(created.ref || '').slice(0, 6));       // порожній номер від НП не повинен лишити ТТН «поза реєстром»
+    reg = { date: now, no: regNo, ref: created.ref, range: bot_regRange(nos), count: ttns.length, status: 'Створено', ttns: ttns.join(', ') };
+    reg._row = bot_regWrite_(null, reg);                                              // 1) запис про реєстр (з переліком ТТН) — одразу після створення в НП
   } else {
     ttns = reg.ttns.split(/[,\s]+/).filter(Boolean);
     nos = bot_regOrderNos_(ttns);
   }
+  // 2) позначка «Реєстр» в рядках ТТН — і при відновленні після збою (ідемпотентно): інакше ці ТТН завтра потрапили б у другий реєстр
+  var setNo = reg.no;
+  var toMark = bot_readTtnRows().filter(function (x) { return ttns.indexOf(x.ttn) >= 0 && x.registry !== setNo; });
+  bot_ttnPatch(toMark.map(function (u) { return { row: u._row, fields: { registry: setNo } }; }));
   bot_regSend_(reg, ttns, nos, now);
   bot_log('ІНФО', 'реєстр', '№' + reg.no + ' · ' + reg.count + ' ТТН · ' + bot_regRange(nos));
   return { done: true, text: opts.manual ? '✅ Реєстр №' + bot_esc(reg.no) + ' (' + reg.count + ' ТТН) надіслано в гілку «Реєстри».' : '' };
@@ -314,7 +326,9 @@ function bot_registryTick(now, minutes, today) {
       bot_log('ПОМИЛКА', 'реєстр', 'спроба ' + prog.fails + ': ' + e.message);
       if (prog.fails >= 3) {
         bot_setProp(BOT_PROP.LAST_REGISTRY_DATE, today);
-        bot_sendToOwners('❌ Реєстр не вдалося сформувати/надіслати: ' + bot_esc(bot_scrub(e.message)) + '\nПісля виправлення — <code>/registry</code>.');
+        var stuck = bot_readRegistries().filter(function (x) { return x.status === 'Створено'; })[0];
+        if (stuck) bot_regWrite_(stuck._row, { status: 'Помилка' });             // реєстр уже є в НП, але PDF не надіслано — не блокуємо наступні реєстри
+        bot_sendToOwners('❌ Реєстр не вдалося сформувати/надіслати: ' + bot_esc(bot_scrub(e.message)) + (stuck ? '\n⚠️ Реєстр №' + bot_esc(stuck.no) + ' у НП створено, але PDF не надіслано — завантажте маркування в кабінеті НП. Його ТТН вже позначені як у реєстрі.' : '') + '\nПісля виправлення — <code>/registry</code>.');
       }
     }
   }

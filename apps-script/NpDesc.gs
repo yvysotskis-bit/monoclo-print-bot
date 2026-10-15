@@ -121,8 +121,8 @@ function bot_npDiffDocs(before, after) {
 
 function bot_npDocWindow_() {
   var now = new Date();
-  // НП: різниця DateTimeFrom–DateTimeTo не більше трьох місяців → беремо 80 днів назад + завтра (ТТН з гілки свіжі)
-  return { from: bot_fmtDate(new Date(now.getTime() - 80 * 86400000)), to: bot_fmtDate(new Date(now.getTime() + 86400000)) };
+  // НП: різниця DateTimeFrom–DateTimeTo не більше трьох місяців
+  return { from: bot_fmtDate(new Date(now.getTime() - 55 * 86400000)), to: bot_fmtDate(new Date(now.getTime() + 30 * 86400000)) };   // 85 днів — менше за ліміт НП (3 місяці); ТТН з датою відправлення в майбутньому теж знаходяться
 }
 
 /** Документ за номером ТТН (InternetDocument.getDocumentList) або null. */
@@ -164,7 +164,7 @@ function bot_npWriteDesc(ttn, text) {
       return { state: 'error', ref: ref, changed: changed, error: 'НП прийняла запит (відповідь: ' + Object.keys(updInfo).join(', ') + '), але «Додаткова інформація» після запису: «' + String(after.AdditionalInformation || '(порожньо)') + '», а надсилали «' + text + '».' + newNo };
     }
     if (changed.length) {
-      return { state: 'error', ref: ref, changed: changed, error: 'Після запису змінились інші поля: ' + changed.join(', ') + ' — перевірте ТТН у кабінеті НП!' };
+      return { state: 'error', ref: ref, changed: changed, error: '⛔ Після запису змінились інші поля: ' + changed.join(', ') + ' — перевірте ТТН у кабінеті НП!' };
     }
     return { state: 'written', ref: ref };
   } catch (e) {
@@ -186,6 +186,15 @@ function bot_npLive() { return String(bot_setting('NP_MODE', 'перевірка
 function bot_ttnProcess() {
   var rows = bot_readTtnRows().filter(function (r) { return r.status === 'Новий' && r.desc; });
   if (!rows.length) return;
+  // перевірка походження: пишемо в НП лише ТТН, яка справді з повідомлення гілки «Замовлення на клієнта»
+  var orders = bot_readOrders(), bad = [], good = [];
+  rows.forEach(function (r) { (bot_ttnThreadEvidence_(r, orders) ? good : bad).push(r); });
+  if (bad.length) {
+    bot_ttnPatch(bad.map(function (r) { return { row: r._row, fields: { status: 'Помилка НП', note: '⛔ немає повідомлення в гілці «Замовлення на клієнта» — в НП не пишу' } }; }));
+    bot_sendToOwners('⛔ ТТН без повідомлення в гілці «Замовлення на клієнта» — в НП не пишу і в реєстр не беру: ' + bad.map(function (r) { return bot_code(r.ttn); }).join(', '));
+  }
+  rows = good;
+  if (!rows.length) return;
   if (!bot_npLive()) {
     var lines = rows.map(function (r) { return bot_code(r.ttn) + ' → ' + bot_esc(r.desc) + ' <i>(' + r.len + ' симв.)</i>' + (r.orders ? '\n   №' + bot_esc(r.orders) : ''); });
     bot_sendToOwners('👀 <b>Режим перевірки</b> — в НП нічого не записую. Ось що записав би:\n\n' + lines.join('\n\n') +
@@ -193,14 +202,14 @@ function bot_ttnProcess() {
     bot_ttnPatch(rows.map(function (r) { return { row: r._row, fields: { status: 'Перевірка' } }; }));
     return;
   }
-  var now = new Date(), patches = [], errs = [];
-  var stopTick = false;
-  rows.slice(0, 6).forEach(function (r) {                              // не більше 6 ТТН за хвилину: ліміт запитів НП
+  var now = new Date(), patches = [], errs = [], stopTick = false, keyAlert = false;
+  var eligible = rows.filter(function (r) { return !(r.note && r.note.indexOf('⏳') === 0 && now.getMinutes() % 3 !== 0); });   // ⏳-рядки (після збою) — не частіше ніж раз на 3 хв і не займають чергу
+  eligible.slice(0, 6).forEach(function (r) {                          // не більше 6 ТТН за хвилину: ліміт запитів НП
     if (stopTick) return;
-    if (r.note && r.note.indexOf('⏳') === 0 && now.getMinutes() % 3 !== 0) return;            // після збою/ліміту — не частіше ніж раз на 3 хв
     if (typeof Utilities !== 'undefined' && Utilities.sleep) Utilities.sleep(800);
     var res = bot_npWriteDesc(r.ttn, r.desc);
-    if (res.state === 'transient' && /забагато запитів/.test(res.error || '')) stopTick = true;   // ліміт НП — решту на наступну хвилину
+    if (res.state === 'transient' && /забагато запитів|ключ API/.test(res.error || '')) stopTick = true;   // ліміт НП / недійсний ключ — решту не чіпаємо
+    if (res.state === 'transient' && /ключ API/.test(res.error || '')) keyAlert = true;
     if (res.state === 'written' || res.state === 'same') {
       patches.push({ row: r._row, fields: { status: 'Записано в НП', written: now, note: '', npRef: res.ref || '' } });
     } else if (res.state === 'transient') {
@@ -212,10 +221,14 @@ function bot_ttnProcess() {
     }
   });
   bot_ttnPatch(patches);
+  if (keyAlert && Date.now() - Number(bot_prop('LAST_KEY_ALERT_TS') || 0) > 3600000) {
+    bot_setProp('LAST_KEY_ALERT_TS', Date.now());
+    bot_sendToOwners('🔑 НП відхиляє ключ API (недійсний або без прав). Описи не записуються, ТТН чекають у черзі. Введіть ключ знову: 🤖 Бот → Ввести ключ Нової пошти.');
+  }
   var okNow = patches.filter(function (p) { return p.fields.status === 'Записано в НП'; }).length;
   var left = bot_readTtnRows().filter(function (r) { return r.status === 'Новий'; }).length;
   if (okNow && (okNow >= 3 || left > 0)) bot_sendToOwners('✅ Записано в НП: ' + okNow + ' ТТН' + (left ? ' · лишилось в черзі: ' + left + ' (по ~6 на хвилину)' : ' · черга порожня'));
-  if (errs.length) bot_sendToOwners('❌ <b>Помилка НП</b> — опис не записано (повторів не буде, ТТН не піде в реєстр, доки ви не вирішите):\n\n' + errs.join('\n') + '\n\nСвій текст: <code>/setdesc ТТН текст</code>.');
+  if (errs.length) bot_sendToOwners('❌ <b>Помилка НП</b> — опис не записано (повторів не буде, ТТН не піде в реєстр, доки ви не вирішите):\n\n' + errs.join('\n') + '\n\nСвій текст: <code>/setdesc ТТН текст</code>; повторити: <code>/retry</code>.');
 }
 
 // ---------- команди власника ----------
@@ -266,15 +279,21 @@ function bot_npTestCallback(parts, ctx) {
 }
 
 /** /live — «затверджую»: бойовий режим (лише після успішного /nptest). */
-/** /retry [ТТН] — повторити запис опису для ТТН зі статусом «Помилка НП» (усі або одна). */
+/** /retry [ТТН] [force] — повторити запис опису для ТТН зі статусом «Помилка НП». Рядки з поміткою «⛔» (змінились інші поля / немає повідомлення в гілці) — лише після ручної перевірки: /retry ТТН force. */
 function bot_cmdRetry(chatId, arg) {
-  var q = bot_normTtn(arg);
-  var n = bot_withLock(function () {
+  var parts = String(arg || '').trim().split(/\s+/).filter(Boolean);
+  var force = parts.some(function (x) { return /^force$/i.test(x); });
+  var q = bot_normTtn(parts.filter(function (x) { return !/^force$/i.test(x); }).join(''));
+  var res = bot_withLock(function () {
     var rows = bot_readTtnRows().filter(function (r) { return r.status === 'Помилка НП' && (!q || r.ttn === q); });
-    bot_ttnPatch(rows.map(function (r) { return { row: r._row, fields: { status: 'Новий', note: '' } }; }));
-    return rows.length;
+    var blocked = rows.filter(function (r) { return r.note.indexOf('⛔') === 0 && !(force && q); });
+    var go = rows.filter(function (r) { return blocked.indexOf(r) < 0; });
+    bot_ttnPatch(go.map(function (r) { return { row: r._row, fields: { status: 'Новий', note: '' } }; }));
+    return { n: go.length, blocked: blocked.map(function (r) { return r.ttn; }) };
   });
-  bot_send(chatId, n ? '🔁 Повторюю запис для ' + n + ' ТТН (не більше 6 на хвилину). Результат — окремим повідомленням, якщо будуть помилки.' : 'Немає ТТН зі статусом «Помилка НП».');
+  var t = res.n ? '🔁 Повторюю запис для ' + res.n + ' ТТН (не більше 6 на хвилину). Результат — окремим повідомленням, якщо будуть помилки.' : 'Немає ТТН зі статусом «Помилка НП» для повтору.';
+  if (res.blocked.length) t += '\n⛔ Не повторюю (потрібна ручна перевірка в кабінеті НП, далі <code>/retry ТТН force</code>): ' + res.blocked.map(bot_code).join(', ');
+  bot_send(chatId, t);
 }
 
 function bot_cmdLive(chatId) {
