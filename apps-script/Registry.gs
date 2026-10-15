@@ -149,7 +149,7 @@ function bot_registryRun(opts) {
   var now = new Date(), today = bot_dayKey(now);
   if (!bot_npLive()) return { done: true, text: 'Режим перевірки: реєстр не створюю (це запис у НП). Після <code>/live</code> — працюватиму.' };
   var regs = bot_readRegistries();
-  var todays = regs.filter(function (r) { return r.date && bot_dayKey(r.date) === today && r.status !== 'Помилка'; })[0];
+  var todays = opts.force ? null : regs.filter(function (r) { return r.date && bot_dayKey(r.date) === today && r.status !== 'Помилка'; })[0];   // force — екстрений додатковий реєстр
   var pending = regs.filter(function (r) { return r.status === 'Створено'; })[0];       // створено в НП, але PDF ще не надіслано
   if (todays && todays.status === 'Надіслано') {
     if (!opts.manual) return { done: true };
@@ -205,7 +205,12 @@ function bot_registryPreview(chatId) {
 }
 
 function bot_cmdRegistry(chatId, arg) {
-  if (String(arg || '').trim().toLowerCase() === 'preview') return bot_registryPreview(chatId);
+  var a = String(arg || '').trim().toLowerCase();
+  if (a === 'preview') return bot_registryPreview(chatId);
+  if (a === 'now' || a === 'екстрено') {
+    return bot_send(chatId, '🚨 <b>Екстрений реєстр.</b> Створю ще один реєстр у НП із усіх ТТН, що готові і ще не в реєстрі (навіть якщо сьогодні вже був реєстр), і одразу надішлю PDF у гілку «Реєстри». Створити?',
+      { keyboard: { inline_keyboard: [[{ text: '🚨 Так, створити зараз', callback_data: 'regx' }, { text: 'Ні', callback_data: 'regn' }]] } });
+  }
   bot_send(chatId, 'Сформувати реєстр у НП зараз і надіслати PDF у гілку «Реєстри»? Якщо сьогодні реєстр уже є — лише перевідправлю його.',
     { keyboard: { inline_keyboard: [[{ text: '✅ Так', callback_data: 'regy' }, { text: 'Ні', callback_data: 'regn' }]] } });
 }
@@ -214,7 +219,7 @@ function bot_registryCallback(parts, ctx) {
   if (parts[0] === 'regn') { bot_edit(ctx.chatId, ctx.msgId, 'Скасовано.'); return bot_answerCb(ctx.cb.id, 'Скасовано'); }
   bot_answerCb(ctx.cb.id, 'Працюю…');
   var r;
-  try { r = bot_registryRun({ manual: true }); } catch (e) { r = { text: '❌ ' + bot_esc(bot_scrub(e.message)) }; }
+  try { r = bot_registryRun({ manual: true, force: parts[0] === 'regx' }); } catch (e) { r = { text: '❌ ' + bot_esc(bot_scrub(e.message)) }; }
   bot_edit(ctx.chatId, ctx.msgId, r.text || 'Готово.');
 }
 

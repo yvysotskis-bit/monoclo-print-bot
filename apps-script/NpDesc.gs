@@ -56,6 +56,13 @@ function bot_npSameText_(a, b) {
   return n(a) === n(b);
 }
 
+/** НП: «DateTime cannot be less then now» — дата відправлення в минулому не приймається; тоді ставимо сьогодні (поле, яке НП змушує оновити). */
+function bot_npNotPast_(ddmmyyyy) {
+  var d = bot_parseDate(ddmmyyyy), today = bot_makeDate(bot_kyivParts(new Date()).y, bot_kyivParts(new Date()).m, bot_kyivParts(new Date()).d);
+  if (!d || bot_dayNum(d) >= bot_dayNum(today)) return ddmmyyyy;
+  return bot_fmtDate(today);
+}
+
 function bot_npDateOnly_(s) {
   var m = String(s || '').match(/^\d{2}\.\d{2}\.\d{4}/);
   return m ? m[0] : String(s || '');
@@ -73,7 +80,7 @@ function bot_npBuildPayload(doc, text) {
     if (!f[2] && (bot_npIsZero_(val) || /^0001-01-01/.test(String(val)))) return;   // «порожня» дата НП: 0001-01-01 — теж не передаємо
     if (!f[2] && bot_npIsZero_(val)) return;                        // необов'язкове поле зі значенням 0 / «0.00» НП не приймає назад («is invalid») — не передаємо
     if (!bot_npHas_(val)) { if (f[2]) missing.push(f[0]); return; }
-    payload[f[0]] = f[0] === 'DateTime' ? bot_npDateOnly_(val) : val;
+    payload[f[0]] = f[0] === 'DateTime' ? bot_npNotPast_(bot_npDateOnly_(val)) : val;
   });
   // Накладений платіж: НП віддає його як BackwardDeliveryCargoType + BackwardDeliverySum/Money, а приймає як BackwardDeliveryData
   if (!payload.BackwardDeliveryData) {
@@ -97,7 +104,7 @@ function bot_npDiffDocs(before, after) {
   BOT_NP_UPDATE_FIELDS_.forEach(function (f) {
     var b, a;
     f[1].forEach(function (k) { if (b === undefined && before[k] !== undefined) b = before[k]; if (a === undefined && after[k] !== undefined) a = after[k]; });
-    if (f[0] === 'DateTime') { b = bot_npDateOnly_(b); a = bot_npDateOnly_(a); }
+    if (f[0] === 'DateTime') return;                                  // НП вимагає дату ≥ сьогодні — це поле може змінитись і це очікувано
     if (!f[2]) { if (b === undefined || bot_npIsZero_(b) || !bot_npHas_(b)) b = ''; if (a === undefined || bot_npIsZero_(a) || !bot_npHas_(a)) a = ''; }   // «немає» = «0»
     if (bot_npNorm_(b) !== bot_npNorm_(a)) changed.push(f[0]);
   });
@@ -161,7 +168,7 @@ function bot_npWriteDesc(ttn, text) {
     }
     return { state: 'written', ref: ref };
   } catch (e) {
-    if (e.npLogical) return { state: 'error', error: bot_scrub(e.message) };
+    if (e.npLogical && !e.npTransient) return { state: 'error', error: bot_scrub(e.message) };
     return { state: 'transient', error: bot_scrub(e.message) };
   }
 }
@@ -187,9 +194,13 @@ function bot_ttnProcess() {
     return;
   }
   var now = new Date(), patches = [], errs = [];
-  rows.slice(0, 15).forEach(function (r) {
-    if (r.note && r.note.indexOf('⏳') === 0 && now.getMinutes() % 5 !== 0) return;          // після збою зв'язку — не частіше ніж раз на 5 хв
+  var stopTick = false;
+  rows.slice(0, 6).forEach(function (r) {                              // не більше 6 ТТН за хвилину: ліміт запитів НП
+    if (stopTick) return;
+    if (r.note && r.note.indexOf('⏳') === 0 && now.getMinutes() % 3 !== 0) return;            // після збою/ліміту — не частіше ніж раз на 3 хв
+    if (typeof Utilities !== 'undefined' && Utilities.sleep) Utilities.sleep(800);
     var res = bot_npWriteDesc(r.ttn, r.desc);
+    if (res.state === 'transient' && /забагато запитів/.test(res.error || '')) stopTick = true;   // ліміт НП — решту на наступну хвилину
     if (res.state === 'written' || res.state === 'same') {
       patches.push({ row: r._row, fields: { status: 'Записано в НП', written: now, note: '', npRef: res.ref || '' } });
     } else if (res.state === 'transient') {
@@ -252,6 +263,17 @@ function bot_npTestCallback(parts, ctx) {
 }
 
 /** /live — «затверджую»: бойовий режим (лише після успішного /nptest). */
+/** /retry [ТТН] — повторити запис опису для ТТН зі статусом «Помилка НП» (усі або одна). */
+function bot_cmdRetry(chatId, arg) {
+  var q = bot_normTtn(arg);
+  var n = bot_withLock(function () {
+    var rows = bot_readTtnRows().filter(function (r) { return r.status === 'Помилка НП' && (!q || r.ttn === q); });
+    bot_ttnPatch(rows.map(function (r) { return { row: r._row, fields: { status: 'Новий', note: '' } }; }));
+    return rows.length;
+  });
+  bot_send(chatId, n ? '🔁 Повторюю запис для ' + n + ' ТТН (не більше 6 на хвилину). Результат — окремим повідомленням, якщо будуть помилки.' : 'Немає ТТН зі статусом «Помилка НП».');
+}
+
 function bot_cmdLive(chatId) {
   if (bot_npLive()) return bot_send(chatId, 'Уже бойовий режим.');
   if (bot_prop(BOT_PROP.NP_TEST_OK) !== '1') {

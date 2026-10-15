@@ -96,14 +96,19 @@ function bot_npPlanPatch(order, item, now) {
 function bot_npCall_(modelName, calledMethod, props) {
   var key = bot_prop(BOT_PROP.NP_KEY);
   if (!key) throw new Error('Не введено ключ API Нової пошти. Меню 🤖 Бот → Ввести ключ Нової пошти.');
-  var resp = UrlFetchApp.fetch('https://api.novaposhta.ua/v2.0/json/', {
-    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-    payload: JSON.stringify({ apiKey: key, modelName: modelName, calledMethod: calledMethod, methodProperties: props })
-  });
-  var body;
-  try { body = JSON.parse(resp.getContentText()); } catch (e) { throw new Error('НП відповіла не JSON (HTTP ' + resp.getResponseCode() + ')'); }
-  if (!body.success) { var err = new Error('НП: ' + ((body.errors || []).join('; ') || 'невідома помилка')); err.npLogical = true; throw err; }
-  return body.data || [];
+  var payload = JSON.stringify({ apiKey: key, modelName: modelName, calledMethod: calledMethod, methodProperties: props });
+  for (var attempt = 0; ; attempt++) {
+    var resp = UrlFetchApp.fetch('https://api.novaposhta.ua/v2.0/json/', { method: 'post', contentType: 'application/json', muteHttpExceptions: true, payload: payload });
+    var body;
+    try { body = JSON.parse(resp.getContentText()); } catch (e) { throw new Error('НП відповіла не JSON (HTTP ' + resp.getResponseCode() + ')'); }
+    if (body.success) return body.data || [];
+    var text = (body.errors || []).join('; ') || 'невідома помилка';
+    if (/to+ many requests|too many requests/i.test(text)) {            // ліміт запитів НП — не відмова: чекаємо й повторюємо, далі — «тимчасова» помилка
+      if (attempt < 3) { if (typeof Utilities !== 'undefined' && Utilities.sleep) Utilities.sleep(2500 * (attempt + 1)); continue; }
+      var tr = new Error('НП: забагато запитів — повторю пізніше'); tr.npTransient = true; throw tr;
+    }
+    var err = new Error('НП: ' + text); err.npLogical = true; throw err;
+  }
 }
 
 /** ТТН → розібрані дані НП. Пакети по 100. */

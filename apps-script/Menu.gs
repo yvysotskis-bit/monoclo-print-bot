@@ -19,7 +19,9 @@ var BOT_COMMANDS_ = [
   { command: 'registry', description: 'Реєстр зараз / preview' },
   { command: 'backfill', description: 'Описи для замовлень з таблиці' },
   { command: 'addpay', description: 'Додати оплату: /addpay сума дата' },
+  { command: 'allocate', description: 'Які ТТН покривають оплати' },
   { command: 'live', description: 'Бойовий режим запису в НП' },
+  { command: 'retry', description: 'Повторити ТТН з помилкою НП' },
   { command: 'preview', description: 'Режим перевірки (нічого в НП)' }
 ];
 

@@ -340,9 +340,11 @@ function bot_helpText() {
     '• /desc &lt;ТТН&gt; — опис ТТН і його статус\n' +
     '• /setdesc &lt;ТТН&gt; &lt;текст&gt; — свій текст опису (до 100 символів; «-» — повернути автоматичний)\n' +
     '• /backfill — створити описи для замовлень із таблиці (імпорт), яких ще немає в «ТТН»\n' +
+    '• /allocate — які ТТН покривають внесені оплати (позначу «Оплачено» після вашої кнопки); /undoalloc &lt;ID&gt; — скасувати\n' +
     '• /addpay &lt;сума&gt; [дата] — додати оплату вручну (напр. <code>/addpay 21401 12.09.2026</code>)\n' +
-    '• /registry — реєстр зараз; /registry preview — що ввійде\n' +
+    '• /registry — реєстр зараз; /registry preview — що ввійде; /registry now — ЕКСТРЕНИЙ додатковий реєстр\n' +
     '• /nptest &lt;ТТН&gt; &lt;текст&gt; — перевірка запису на ТЕСТОВІЙ ТТН; /npdoc &lt;ТТН&gt; — що віддає НП\n' +
+    '• /retry [ТТН] — повторити запис опису для ТТН з «Помилка НП»\n' +
     '• /live — бойовий режим (запис у НП); /preview — режим перевірки\n' +
     '• /help — ця довідка';
 }
@@ -364,9 +366,12 @@ function bot_onCommand(msg, c) {
     case 'desc': return bot_cmdDesc(chatId, c.arg);
     case 'backfill': return bot_cmdBackfill(chatId);
     case 'addpay': return bot_cmdAddPay(chatId, c.arg);
+    case 'allocate': return bot_cmdAllocate(chatId);
+    case 'undoalloc': return bot_cmdUndoAlloc(chatId, c.arg);
     case 'setdesc': return bot_cmdSetDesc(chatId, c.arg);
     case 'registry': return bot_cmdRegistry(chatId, c.arg);
     case 'live': return bot_cmdLive(chatId);
+    case 'retry': return bot_cmdRetry(chatId, c.arg);
     case 'preview': return bot_cmdPreviewMode(chatId);
     case 'npdoc': return bot_cmdNpDoc(chatId, c.arg);
     case 'nptest': return bot_cmdNpTest(chatId, c.arg);
@@ -420,7 +425,9 @@ function bot_onCallback(cb) {
       case 'pay': case 'payy': case 'payn': case 'det': case 'cnc': case 'dsp': case 'rs': case 'rsy': case 'rsn':
       case 'sup': case 'opy': case 'opc': case 'opn': case 'undy': case 'undn':
         return bot_reconCallback(parts, ctx);
-      case 'regy': case 'regn':
+      case 'aly': case 'aln':
+        return bot_allocCallback(parts, ctx);
+      case 'regy': case 'regn': case 'regx':
         return bot_registryCallback(parts, ctx);
       case 'nptq': case 'nptn':
         return bot_npTestCallback(parts, ctx);

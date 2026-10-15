@@ -1525,9 +1525,11 @@ function bot_helpText() {
     '• /desc &lt;ТТН&gt; — опис ТТН і його статус\n' +
     '• /setdesc &lt;ТТН&gt; &lt;текст&gt; — свій текст опису (до 100 символів; «-» — повернути автоматичний)\n' +
     '• /backfill — створити описи для замовлень із таблиці (імпорт), яких ще немає в «ТТН»\n' +
+    '• /allocate — які ТТН покривають внесені оплати (позначу «Оплачено» після вашої кнопки); /undoalloc &lt;ID&gt; — скасувати\n' +
     '• /addpay &lt;сума&gt; [дата] — додати оплату вручну (напр. <code>/addpay 21401 12.09.2026</code>)\n' +
-    '• /registry — реєстр зараз; /registry preview — що ввійде\n' +
+    '• /registry — реєстр зараз; /registry preview — що ввійде; /registry now — ЕКСТРЕНИЙ додатковий реєстр\n' +
     '• /nptest &lt;ТТН&gt; &lt;текст&gt; — перевірка запису на ТЕСТОВІЙ ТТН; /npdoc &lt;ТТН&gt; — що віддає НП\n' +
+    '• /retry [ТТН] — повторити запис опису для ТТН з «Помилка НП»\n' +
     '• /live — бойовий режим (запис у НП); /preview — режим перевірки\n' +
     '• /help — ця довідка';
 }
@@ -1549,9 +1551,12 @@ function bot_onCommand(msg, c) {
     case 'desc': return bot_cmdDesc(chatId, c.arg);
     case 'backfill': return bot_cmdBackfill(chatId);
     case 'addpay': return bot_cmdAddPay(chatId, c.arg);
+    case 'allocate': return bot_cmdAllocate(chatId);
+    case 'undoalloc': return bot_cmdUndoAlloc(chatId, c.arg);
     case 'setdesc': return bot_cmdSetDesc(chatId, c.arg);
     case 'registry': return bot_cmdRegistry(chatId, c.arg);
     case 'live': return bot_cmdLive(chatId);
+    case 'retry': return bot_cmdRetry(chatId, c.arg);
     case 'preview': return bot_cmdPreviewMode(chatId);
     case 'npdoc': return bot_cmdNpDoc(chatId, c.arg);
     case 'nptest': return bot_cmdNpTest(chatId, c.arg);
@@ -1605,7 +1610,9 @@ function bot_onCallback(cb) {
       case 'pay': case 'payy': case 'payn': case 'det': case 'cnc': case 'dsp': case 'rs': case 'rsy': case 'rsn':
       case 'sup': case 'opy': case 'opc': case 'opn': case 'undy': case 'undn':
         return bot_reconCallback(parts, ctx);
-      case 'regy': case 'regn':
+      case 'aly': case 'aln':
+        return bot_allocCallback(parts, ctx);
+      case 'regy': case 'regn': case 'regx':
         return bot_registryCallback(parts, ctx);
       case 'nptq': case 'nptn':
         return bot_npTestCallback(parts, ctx);
@@ -3267,7 +3274,8 @@ function bot_menuPayImport() {
     if (!plan.rows.length) { bot_alert_('Нових оплат немає', bot_payPlanText(plan, false)); return; }
     if (ui.alert('Додати оплати?', bot_payPlanText(plan, false) + '\n\nДодати їх в аркуш «Оплати»?', ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
     var n = bot_payImportApply(plan);
-    bot_alert_('Готово', 'Додано оплат: ' + n);
+    bot_alert_('Готово', 'Додано оплат: ' + n + '. Щоб позначити ТТН оплаченими — у боті команда /allocate.');
+    try { if (bot_ownerIds().length && bot_prop(BOT_PROP.TG_TOKEN)) bot_cmdAllocate(bot_ownerIds()[0]); } catch (e) { bot_log('УВАГА', 'розподіл після імпорту оплат', e.message); }
     try { bot_buildSummary(); } catch (e) { bot_log('УВАГА', 'підсумки після оплат', e.message); }
   } catch (e) { bot_alert_('Не вдалося', e.message); }
 }
@@ -3281,6 +3289,112 @@ function bot_cmdAddPay(chatId, arg) {
   if (m[2] && !date) return bot_send(chatId, 'Не розумію дату. Приклад: 12.09.2026');
   var res = bot_addPaymentRow_('manual-' + Utilities.getUuid().slice(0, 8), sum, date || undefined);
   bot_send(chatId, '✅ Оплату ' + bot_fmtMoney(sum) + ' від ' + bot_fmtDate(date || bot_today()) + ' додано (№' + res.no + ').' + (typeof res.balance === 'number' ? '\n💰 Борг: <b>' + bot_fmtMoney(res.balance) + '</b>' : ''));
+  bot_cmdAllocate(chatId);                                    // одразу пропонуємо розподіл (кнопкою)
+}
+
+
+// ======================= Allocate.gs =======================
+/**
+ * Allocate.gs — розподіл оплат на ТТН. Виробництво не присилає платежі «за ТТН»: власник вносить суми, які вважає потрібними.
+ * Бот пропонує, які ТТН ці суми покривають (за чергою: від старіших до новіших), і ставить «Оплачено» ЛИШЕ після натискання кнопки.
+ * Чиста логіка (bot_planAllocation) — без Google API.
+ */
+
+/**
+ * Черга: ТТН за датою замовлення, потім за номером. Кожна ТТН покрита, коли накопичена собівартість черги ≤ усіх оплат.
+ * Береться лише те, що ПІСЛЯ зрізу початкового залишку (замовлення > OPENING_ORDERS_AFTER; оплати > OPENING_ORDERS_AFTER),
+ * тобто так само, як «Покриття собівартості» на «Підсумках».
+ * @return {pool, totalCost, covered:[{ttn, rowNums:[], cost, paidDate}], coveredCost, alreadyPaid, leftover, nextTtn, nextNeed}
+ */
+function bot_planAllocation(orders, payments, opening) {
+  var cut = opening ? opening.ordersAfter : null;
+  var pays = payments.filter(function (p) { return bot_afterCut_(p.date, cut) && Number(p.sum) > 0; })
+    .sort(function (a, b) { return (a.date ? a.date.getTime() : 0) - (b.date ? b.date.getTime() : 0); });
+  var pool = bot_sumBy_(pays, function (p) { return Number(p.sum) || 0; });
+  var groups = {}, list = [];
+  orders.forEach(function (o) {
+    if (o.status !== 'В роботі' || !o.ttn || !(Number(o.cost) > 0) || !bot_afterCut_(o.date, cut)) return;
+    var g = groups[o.ttn];
+    if (!g) { g = groups[o.ttn] = { ttn: o.ttn, rows: [], cost: 0, minDate: o.date ? o.date.getTime() : 0, minNo: Number(o.no) || 0 }; list.push(g); }
+    g.rows.push(o); g.cost += Number(o.cost) || 0;
+    if (o.date && o.date.getTime() < g.minDate) g.minDate = o.date.getTime();
+    if ((Number(o.no) || 0) < g.minNo) g.minNo = Number(o.no) || 0;
+  });
+  list.sort(function (a, b) { return a.minDate - b.minDate || a.minNo - b.minNo; });
+  var cum = 0, plan = { pool: pool, totalCost: 0, covered: [], coveredCost: 0, alreadyPaid: 0, leftover: 0, nextTtn: '', nextNeed: 0 };
+  var stop = false;
+  list.forEach(function (g) {
+    plan.totalCost += g.cost;
+    if (stop) return;
+    cum = bot_round2(cum + g.cost);
+    if (cum <= pool + 0.005) {
+      plan.coveredCost = cum;
+      var pending = g.rows.filter(function (o) { return o.paid === 'Не оплачено'; });
+      if (!pending.length) { plan.alreadyPaid++; return; }
+      var acc = 0, paidDate = null;                                   // дата платежу, що «закрив» цю ТТН
+      for (var i = 0; i < pays.length; i++) { acc += Number(pays[i].sum); if (acc + 0.005 >= cum) { paidDate = pays[i].date; break; } }
+      plan.covered.push({ ttn: g.ttn, rowNums: pending.map(function (o) { return o._row; }), cost: g.cost, paidDate: paidDate, no: g.minNo });
+    } else { stop = true; plan.nextTtn = g.ttn; plan.nextNeed = bot_round2(cum - pool); }
+  });
+  plan.leftover = bot_round2(pool - plan.coveredCost);
+  return plan;
+}
+
+function bot_allocText(plan, done) {
+  var L = [done ? '✅ Позначено оплаченими' : '💳 <b>Розподіл оплат на ТТН</b> (від старіших до новіших)'];
+  L.push('Оплат з вересня: <b>' + bot_fmtMoney(plan.pool) + '</b> · собівартість ТТН з вересня: ' + bot_fmtMoney(plan.totalCost));
+  var sum = plan.covered.reduce(function (a, c) { return a + c.cost; }, 0);
+  L.push((done ? 'Позначено' : 'Буде позначено') + ' «Оплачено»: <b>' + plan.covered.length + '</b> ТТН на ' + bot_fmtMoney(sum) + (plan.alreadyPaid ? ' (ще ' + plan.alreadyPaid + ' ТТН вже були оплачені)' : ''));
+  if (plan.covered.length) L.push('Від №' + plan.covered[0].no + ' до №' + plan.covered[plan.covered.length - 1].no);
+  L.push('Залишок оплат, що не покрив наступну ТТН: ' + bot_fmtMoney(plan.leftover) + (plan.nextTtn ? ' (до наступної ТТН ' + plan.nextTtn + ' бракує ' + bot_fmtMoney(plan.nextNeed) + ')' : ''));
+  return L.join('\n');
+}
+
+function bot_allocApply(rowNums, paidByRow, id) {
+  bot_withLock(function () {
+    var cur = {}; bot_readOrders().forEach(function (o) { cur[o._row] = o; });
+    var patches = [];
+    rowNums.forEach(function (r) {
+      if (!cur[r] || cur[r].paid !== 'Не оплачено') return;            // змінилось, поки чекали кнопку — не чіпаємо
+      patches.push({ row: r, fields: { paid: 'Оплачено', paidDate: paidByRow[r] ? new Date(paidByRow[r]) : bot_today(), recon: id } });
+    });
+    bot_patchOrders(patches);
+    bot_log('ІНФО', 'розподіл оплат ' + id, 'рядків: ' + patches.length);
+  });
+}
+
+/** /allocate — показати, що покривають внесені суми; «Оплачено» — лише після кнопки. */
+function bot_cmdAllocate(chatId) {
+  var plan = bot_planAllocation(bot_readOrders(), bot_readPayments(), bot_openingFromSettings());
+  if (!plan.covered.length) return bot_send(chatId, bot_allocText(plan, false) + '\n\nНових ТТН для позначки немає.');
+  var rows = [], dates = {};
+  plan.covered.forEach(function (c) { c.rowNums.forEach(function (r) { rows.push(r); dates[r] = c.paidDate ? c.paidDate.getTime() : 0; }); });
+  var token = bot_pendingPut({ kind: 'alloc', rows: rows, dates: dates });
+  bot_send(chatId, bot_allocText(plan, false), { keyboard: { inline_keyboard: [[{ text: '✅ Позначити оплаченими', callback_data: 'aly|' + token }, { text: 'Ні', callback_data: 'aln|' + token }]] } });
+}
+
+function bot_allocCallback(parts, ctx) {
+  var p = bot_pendingGet(parts[1]);
+  if (!p) { bot_answerCb(ctx.cb.id, 'Кнопка застаріла'); return; }
+  bot_pendingDrop(parts[1]);
+  if (parts[0] === 'aln') { bot_edit(ctx.chatId, ctx.msgId, 'Скасовано, нічого не змінено.'); return bot_answerCb(ctx.cb.id, 'Скасовано'); }
+  var kp = bot_kyivParts(new Date());
+  var id = 'Розподіл-' + kp.y + bot_pad2(kp.m) + bot_pad2(kp.d) + '-' + bot_pad2(kp.h) + bot_pad2(kp.mi);
+  bot_allocApply(p.rows, p.dates, id);
+  var plan = bot_planAllocation(bot_readOrders(), bot_readPayments(), bot_openingFromSettings());
+  bot_edit(ctx.chatId, ctx.msgId, '✅ Позначено оплаченими рядків: ' + p.rows.length + '. Позначка в колонці «Звірка»: <code>' + id + '</code>. Скасувати: <code>/undoalloc ' + id + '</code>\n\nЗалишок оплат: ' + bot_fmtMoney(plan.leftover));
+  bot_answerCb(ctx.cb.id, 'Готово');
+}
+
+function bot_cmdUndoAlloc(chatId, arg) {
+  var id = String(arg || '').trim();
+  if (!/^Розподіл-/.test(id)) return bot_send(chatId, 'Формат: <code>/undoalloc Розподіл-20261016-1030</code> (ID з повідомлення про розподіл).');
+  var rows = bot_withLock(function () {
+    var list = bot_readOrders().filter(function (o) { return o.recon === id && o.paid === 'Оплачено'; });
+    bot_patchOrders(list.map(function (o) { return { row: o._row, fields: { paid: 'Не оплачено', paidDate: '', recon: '' } }; }));
+    return list.length;
+  });
+  bot_send(chatId, rows ? '↩️ Знято «Оплачено» з ' + rows + ' рядків (' + bot_esc(id) + ').' : 'Рядків з такою позначкою не знайшов.');
 }
 
 
@@ -3383,14 +3497,19 @@ function bot_npPlanPatch(order, item, now) {
 function bot_npCall_(modelName, calledMethod, props) {
   var key = bot_prop(BOT_PROP.NP_KEY);
   if (!key) throw new Error('Не введено ключ API Нової пошти. Меню 🤖 Бот → Ввести ключ Нової пошти.');
-  var resp = UrlFetchApp.fetch('https://api.novaposhta.ua/v2.0/json/', {
-    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-    payload: JSON.stringify({ apiKey: key, modelName: modelName, calledMethod: calledMethod, methodProperties: props })
-  });
-  var body;
-  try { body = JSON.parse(resp.getContentText()); } catch (e) { throw new Error('НП відповіла не JSON (HTTP ' + resp.getResponseCode() + ')'); }
-  if (!body.success) { var err = new Error('НП: ' + ((body.errors || []).join('; ') || 'невідома помилка')); err.npLogical = true; throw err; }
-  return body.data || [];
+  var payload = JSON.stringify({ apiKey: key, modelName: modelName, calledMethod: calledMethod, methodProperties: props });
+  for (var attempt = 0; ; attempt++) {
+    var resp = UrlFetchApp.fetch('https://api.novaposhta.ua/v2.0/json/', { method: 'post', contentType: 'application/json', muteHttpExceptions: true, payload: payload });
+    var body;
+    try { body = JSON.parse(resp.getContentText()); } catch (e) { throw new Error('НП відповіла не JSON (HTTP ' + resp.getResponseCode() + ')'); }
+    if (body.success) return body.data || [];
+    var text = (body.errors || []).join('; ') || 'невідома помилка';
+    if (/to+ many requests|too many requests/i.test(text)) {            // ліміт запитів НП — не відмова: чекаємо й повторюємо, далі — «тимчасова» помилка
+      if (attempt < 3) { if (typeof Utilities !== 'undefined' && Utilities.sleep) Utilities.sleep(2500 * (attempt + 1)); continue; }
+      var tr = new Error('НП: забагато запитів — повторю пізніше'); tr.npTransient = true; throw tr;
+    }
+    var err = new Error('НП: ' + text); err.npLogical = true; throw err;
+  }
 }
 
 /** ТТН → розібрані дані НП. Пакети по 100. */
@@ -3520,6 +3639,13 @@ function bot_npSameText_(a, b) {
   return n(a) === n(b);
 }
 
+/** НП: «DateTime cannot be less then now» — дата відправлення в минулому не приймається; тоді ставимо сьогодні (поле, яке НП змушує оновити). */
+function bot_npNotPast_(ddmmyyyy) {
+  var d = bot_parseDate(ddmmyyyy), today = bot_makeDate(bot_kyivParts(new Date()).y, bot_kyivParts(new Date()).m, bot_kyivParts(new Date()).d);
+  if (!d || bot_dayNum(d) >= bot_dayNum(today)) return ddmmyyyy;
+  return bot_fmtDate(today);
+}
+
 function bot_npDateOnly_(s) {
   var m = String(s || '').match(/^\d{2}\.\d{2}\.\d{4}/);
   return m ? m[0] : String(s || '');
@@ -3537,7 +3663,7 @@ function bot_npBuildPayload(doc, text) {
     if (!f[2] && (bot_npIsZero_(val) || /^0001-01-01/.test(String(val)))) return;   // «порожня» дата НП: 0001-01-01 — теж не передаємо
     if (!f[2] && bot_npIsZero_(val)) return;                        // необов'язкове поле зі значенням 0 / «0.00» НП не приймає назад («is invalid») — не передаємо
     if (!bot_npHas_(val)) { if (f[2]) missing.push(f[0]); return; }
-    payload[f[0]] = f[0] === 'DateTime' ? bot_npDateOnly_(val) : val;
+    payload[f[0]] = f[0] === 'DateTime' ? bot_npNotPast_(bot_npDateOnly_(val)) : val;
   });
   // Накладений платіж: НП віддає його як BackwardDeliveryCargoType + BackwardDeliverySum/Money, а приймає як BackwardDeliveryData
   if (!payload.BackwardDeliveryData) {
@@ -3561,7 +3687,7 @@ function bot_npDiffDocs(before, after) {
   BOT_NP_UPDATE_FIELDS_.forEach(function (f) {
     var b, a;
     f[1].forEach(function (k) { if (b === undefined && before[k] !== undefined) b = before[k]; if (a === undefined && after[k] !== undefined) a = after[k]; });
-    if (f[0] === 'DateTime') { b = bot_npDateOnly_(b); a = bot_npDateOnly_(a); }
+    if (f[0] === 'DateTime') return;                                  // НП вимагає дату ≥ сьогодні — це поле може змінитись і це очікувано
     if (!f[2]) { if (b === undefined || bot_npIsZero_(b) || !bot_npHas_(b)) b = ''; if (a === undefined || bot_npIsZero_(a) || !bot_npHas_(a)) a = ''; }   // «немає» = «0»
     if (bot_npNorm_(b) !== bot_npNorm_(a)) changed.push(f[0]);
   });
@@ -3625,7 +3751,7 @@ function bot_npWriteDesc(ttn, text) {
     }
     return { state: 'written', ref: ref };
   } catch (e) {
-    if (e.npLogical) return { state: 'error', error: bot_scrub(e.message) };
+    if (e.npLogical && !e.npTransient) return { state: 'error', error: bot_scrub(e.message) };
     return { state: 'transient', error: bot_scrub(e.message) };
   }
 }
@@ -3651,9 +3777,13 @@ function bot_ttnProcess() {
     return;
   }
   var now = new Date(), patches = [], errs = [];
-  rows.slice(0, 15).forEach(function (r) {
-    if (r.note && r.note.indexOf('⏳') === 0 && now.getMinutes() % 5 !== 0) return;          // після збою зв'язку — не частіше ніж раз на 5 хв
+  var stopTick = false;
+  rows.slice(0, 6).forEach(function (r) {                              // не більше 6 ТТН за хвилину: ліміт запитів НП
+    if (stopTick) return;
+    if (r.note && r.note.indexOf('⏳') === 0 && now.getMinutes() % 3 !== 0) return;            // після збою/ліміту — не частіше ніж раз на 3 хв
+    if (typeof Utilities !== 'undefined' && Utilities.sleep) Utilities.sleep(800);
     var res = bot_npWriteDesc(r.ttn, r.desc);
+    if (res.state === 'transient' && /забагато запитів/.test(res.error || '')) stopTick = true;   // ліміт НП — решту на наступну хвилину
     if (res.state === 'written' || res.state === 'same') {
       patches.push({ row: r._row, fields: { status: 'Записано в НП', written: now, note: '', npRef: res.ref || '' } });
     } else if (res.state === 'transient') {
@@ -3716,6 +3846,17 @@ function bot_npTestCallback(parts, ctx) {
 }
 
 /** /live — «затверджую»: бойовий режим (лише після успішного /nptest). */
+/** /retry [ТТН] — повторити запис опису для ТТН зі статусом «Помилка НП» (усі або одна). */
+function bot_cmdRetry(chatId, arg) {
+  var q = bot_normTtn(arg);
+  var n = bot_withLock(function () {
+    var rows = bot_readTtnRows().filter(function (r) { return r.status === 'Помилка НП' && (!q || r.ttn === q); });
+    bot_ttnPatch(rows.map(function (r) { return { row: r._row, fields: { status: 'Новий', note: '' } }; }));
+    return rows.length;
+  });
+  bot_send(chatId, n ? '🔁 Повторюю запис для ' + n + ' ТТН (не більше 6 на хвилину). Результат — окремим повідомленням, якщо будуть помилки.' : 'Немає ТТН зі статусом «Помилка НП».');
+}
+
 function bot_cmdLive(chatId) {
   if (bot_npLive()) return bot_send(chatId, 'Уже бойовий режим.');
   if (bot_prop(BOT_PROP.NP_TEST_OK) !== '1') {
@@ -4079,7 +4220,7 @@ function bot_registryRun(opts) {
   var now = new Date(), today = bot_dayKey(now);
   if (!bot_npLive()) return { done: true, text: 'Режим перевірки: реєстр не створюю (це запис у НП). Після <code>/live</code> — працюватиму.' };
   var regs = bot_readRegistries();
-  var todays = regs.filter(function (r) { return r.date && bot_dayKey(r.date) === today && r.status !== 'Помилка'; })[0];
+  var todays = opts.force ? null : regs.filter(function (r) { return r.date && bot_dayKey(r.date) === today && r.status !== 'Помилка'; })[0];   // force — екстрений додатковий реєстр
   var pending = regs.filter(function (r) { return r.status === 'Створено'; })[0];       // створено в НП, але PDF ще не надіслано
   if (todays && todays.status === 'Надіслано') {
     if (!opts.manual) return { done: true };
@@ -4135,7 +4276,12 @@ function bot_registryPreview(chatId) {
 }
 
 function bot_cmdRegistry(chatId, arg) {
-  if (String(arg || '').trim().toLowerCase() === 'preview') return bot_registryPreview(chatId);
+  var a = String(arg || '').trim().toLowerCase();
+  if (a === 'preview') return bot_registryPreview(chatId);
+  if (a === 'now' || a === 'екстрено') {
+    return bot_send(chatId, '🚨 <b>Екстрений реєстр.</b> Створю ще один реєстр у НП із усіх ТТН, що готові і ще не в реєстрі (навіть якщо сьогодні вже був реєстр), і одразу надішлю PDF у гілку «Реєстри». Створити?',
+      { keyboard: { inline_keyboard: [[{ text: '🚨 Так, створити зараз', callback_data: 'regx' }, { text: 'Ні', callback_data: 'regn' }]] } });
+  }
   bot_send(chatId, 'Сформувати реєстр у НП зараз і надіслати PDF у гілку «Реєстри»? Якщо сьогодні реєстр уже є — лише перевідправлю його.',
     { keyboard: { inline_keyboard: [[{ text: '✅ Так', callback_data: 'regy' }, { text: 'Ні', callback_data: 'regn' }]] } });
 }
@@ -4144,7 +4290,7 @@ function bot_registryCallback(parts, ctx) {
   if (parts[0] === 'regn') { bot_edit(ctx.chatId, ctx.msgId, 'Скасовано.'); return bot_answerCb(ctx.cb.id, 'Скасовано'); }
   bot_answerCb(ctx.cb.id, 'Працюю…');
   var r;
-  try { r = bot_registryRun({ manual: true }); } catch (e) { r = { text: '❌ ' + bot_esc(bot_scrub(e.message)) }; }
+  try { r = bot_registryRun({ manual: true, force: parts[0] === 'regx' }); } catch (e) { r = { text: '❌ ' + bot_esc(bot_scrub(e.message)) }; }
   bot_edit(ctx.chatId, ctx.msgId, r.text || 'Готово.');
 }
 
@@ -5532,7 +5678,9 @@ var BOT_COMMANDS_ = [
   { command: 'registry', description: 'Реєстр зараз / preview' },
   { command: 'backfill', description: 'Описи для замовлень з таблиці' },
   { command: 'addpay', description: 'Додати оплату: /addpay сума дата' },
+  { command: 'allocate', description: 'Які ТТН покривають оплати' },
   { command: 'live', description: 'Бойовий режим запису в НП' },
+  { command: 'retry', description: 'Повторити ТТН з помилкою НП' },
   { command: 'preview', description: 'Режим перевірки (нічого в НП)' }
 ];
 

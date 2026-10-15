@@ -350,7 +350,7 @@ test('Оплати з чату «Отправка отчет»: розбір с�
   env.props.TG_TOKEN = '123:ABCDEFGHIJKLMNOPQRSTUVWXYZ'; c.bot_setSetting('OWNER_IDS', String(OWNER));
   c.bot_cmdAddPay(OWNER, '5к 14.10.2026');
   assert.equal(c.bot_readPayments().length, 7);
-  assert.match(env.lastSent().text, /5\s?000/);
+  assert.ok(env.tg.sent.some(m => /Оплату 5\s?000/.test(m.text)));
 });
 
 test('Покриття собівартості місяця: 🟢 покрито / 🟡 недоплата ≤ порогу / 🔴 велика різниця; формули на «Підсумках»', () => {
@@ -447,4 +447,81 @@ test('C: НП робить першу літеру великою («тест 12
   assert.equal(env.ctx.bot_npWriteDesc(TEST, 'тест 123').state, 'written');
   assert.equal(env.docs[TEST].AdditionalInformation, 'Тест 123');
   assert.equal(env.ctx.bot_npWriteDesc(TEST, 'тест 123').state, 'same');          // повтор — нічого не робимо
+});
+
+test('Розподіл оплат на ТТН: черга від старіших, повністю покриті позначаються лише кнопкою, скасування /undoalloc', () => {
+  const env = fresh(); const c = env.ctx;
+  c.bot_setSetting('OPENING_DEBT', '2227020'); c.bot_setSetting('OPENING_ORDERS_AFTER', '31.08.2026'); c.bot_setSetting('OPENING_PAYS_AFTER', '08.09.2026');
+  const d = (m, dd) => c.bot_makeDate(2026, m, dd);
+  const mk = (no, ttn, cost, date, extra) => c.bot_appendOrderRow(Object.assign({ no, date, print: 'A', type: 'Футболка', color: 'Чорний', size: 'M', placement: 'Позаду', prints: 1, ttn, cost, status: 'В роботі', paid: 'Не оплачено', msgId: String(no) }, extra), []);
+  mk(14500, '20451000000001', 5000, d(8, 20));                  // до зрізу — не рахується
+  mk(14600, '20451000000010', 420, d(9, 1)); mk(14601, '20451000000010', 420, d(9, 1));     // ТТН1: 840
+  mk(14602, '20451000000011', 740, d(9, 2));                                                 // ТТН2: 740
+  mk(14603, '20451000000012', 420, d(9, 3));                                                 // ТТН3: 420
+  mk(14604, '20451000000013', 420, d(9, 4), { status: 'Скасовано' });                          // скасоване — пропуск
+  const pay = (sum, date) => c.bot_addPaymentRow_('t' + sum, sum, date);
+  pay(1000, d(9, 5)); pay(600, d(9, 9));                                                      // разом 1600: покриває ТТН1 (840) і ТТН2 (840+740=1580), на ТТН3 бракує 400
+  const plan = c.bot_planAllocation(c.bot_readOrders(), c.bot_readPayments(), c.bot_openingFromSettings());
+  assert.equal(plan.pool, 1600); assert.equal(plan.covered.length, 2); assert.equal(plan.leftover, 20); assert.equal(plan.nextNeed, 400);
+  assert.equal(plan.covered[0].ttn, '20451000000010'); assert.equal(plan.covered[1].ttn, '20451000000011');
+  // без кнопки нічого не змінюється; кнопка — позначає
+  env.props.TG_TOKEN = '123:ABCDEFGHIJKLMNOPQRSTUVWXYZ'; c.bot_setSetting('OWNER_IDS', String(OWNER));
+  env.update(privMsg('/allocate')); env.poll();
+  const q = env.lastSent();
+  assert.ok(c.bot_readOrders().every(o => o.paid === 'Не оплачено'));
+  env.update(cb(q.reply_markup.inline_keyboard[0][0].callback_data, q.message_id)); env.poll();
+  const paid = c.bot_readOrders().filter(o => o.paid === 'Оплачено');
+  assert.equal(paid.length, 3); assert.ok(paid.every(o => /^Розподіл-/.test(o.recon)));
+  assert.equal(c.bot_readOrders().find(o => o.no === 14500).paid, 'Не оплачено');
+  assert.equal(c.bot_readOrders().find(o => o.no === 14603).paid, 'Не оплачено');
+  // повторний розподіл — нічого нового; /undoalloc знімає
+  const again = c.bot_planAllocation(c.bot_readOrders(), c.bot_readPayments(), c.bot_openingFromSettings());
+  assert.equal(again.covered.length, 0); assert.equal(again.alreadyPaid, 2);
+  env.update(privMsg('/undoalloc ' + paid[0].recon)); env.poll();
+  assert.ok(c.bot_readOrders().every(o => o.paid === 'Не оплачено'));
+});
+
+test('НП: дата в минулому → сьогодні; «To many requests» — тимчасова помилка з повтором, не «Помилка НП»; /retry', () => {
+  const env = fresh(); const c = env.ctx;
+  const old = npDoc(TEST); old.DateTime = '01.10.2026 10:00:00';
+  const p = c.bot_npBuildPayload(old, 'x').payload;
+  assert.equal(p.DateTime, '07.10.2026');                                              // сьогодні в тесті — 07.10.2026
+  assert.equal(c.bot_npBuildPayload(npDoc(TEST), 'x').payload.DateTime, '07.10.2026');
+  const future = npDoc(TEST); future.DateTime = '20.10.2026 10:00:00';
+  assert.equal(c.bot_npBuildPayload(future, 'x').payload.DateTime, '20.10.2026');
+  const after = Object.assign({}, old, { DateTime: '07.10.2026 00:00:00' });
+  assert.ok(!c.bot_npDiffDocs(old, after).includes('DateTime'));
+  // ліміт запитів
+  env.docs[TEST] = npDoc(TEST); let limited = 0;
+  env.np.handler = (p2) => { limited++; return []; };
+  env.np.fail = 'To many requests';
+  const r = c.bot_npWriteDesc(TEST, 'x');
+  assert.equal(r.state, 'transient'); assert.ok(limited >= 0);
+  env.np.fail = null;
+  // /retry повертає «Помилка НП» у «Новий»
+  c.bot_ttnAppend({ ttn: TEST, orders: '15200', original: 'x', desc: '15200 test', len: 10, status: 'Помилка НП', note: 'DateTime cannot be less then now', msgId: '1' });
+  env.props.TG_TOKEN = '123:ABCDEFGHIJKLMNOPQRSTUVWXYZ'; c.bot_setSetting('OWNER_IDS', String(OWNER));
+  c.bot_cmdRetry(OWNER, '');
+  assert.equal(ttnRows(env)[0].status, 'Новий');
+});
+
+test('Екстрений реєстр: /registry now створює додатковий реєстр навіть якщо сьогодні вже був', () => {
+  const env = liveEnv();
+  env.update(groupMsg(MSG1)); env.poll();
+  env.setNow('2026-10-07T07:00:00Z'); env.poll();                                       // 10:00 — звичайний реєстр
+  assert.equal(env.scans.length, 1);
+  env.update(groupMsg(MSG2)); env.docs[T2] = npDoc(T2); env.poll();                    // нова ТТН після реєстру
+  env.scanNo = '105-0002';
+  env.update(privMsg('/registry')); env.poll();
+  let q = env.lastSent();
+  env.update(cb(q.reply_markup.inline_keyboard[0][0].callback_data, q.message_id)); env.poll();
+  assert.equal(env.scans.length, 1);                                                    // звичайний /registry нового не створює
+  env.update(privMsg('/registry now')); env.poll();
+  q = env.lastSent();
+  assert.match(q.text, /Екстрений реєстр/);
+  env.update(cb(q.reply_markup.inline_keyboard[0][0].callback_data, q.message_id)); env.poll();
+  assert.equal(env.scans.length, 2);
+  assert.deepEqual([...env.scans[1].DocumentRefs], ['ref-' + T2]);
+  assert.equal(groupDocs(env).length >= 2, true);
+  assert.equal(ttnRows(env).find(r => r.ttn === T2).registry, '105-0002');
 });

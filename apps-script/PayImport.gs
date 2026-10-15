@@ -76,7 +76,8 @@ function bot_menuPayImport() {
     if (!plan.rows.length) { bot_alert_('Нових оплат немає', bot_payPlanText(plan, false)); return; }
     if (ui.alert('Додати оплати?', bot_payPlanText(plan, false) + '\n\nДодати їх в аркуш «Оплати»?', ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
     var n = bot_payImportApply(plan);
-    bot_alert_('Готово', 'Додано оплат: ' + n);
+    bot_alert_('Готово', 'Додано оплат: ' + n + '. Щоб позначити ТТН оплаченими — у боті команда /allocate.');
+    try { if (bot_ownerIds().length && bot_prop(BOT_PROP.TG_TOKEN)) bot_cmdAllocate(bot_ownerIds()[0]); } catch (e) { bot_log('УВАГА', 'розподіл після імпорту оплат', e.message); }
     try { bot_buildSummary(); } catch (e) { bot_log('УВАГА', 'підсумки після оплат', e.message); }
   } catch (e) { bot_alert_('Не вдалося', e.message); }
 }
@@ -90,4 +91,5 @@ function bot_cmdAddPay(chatId, arg) {
   if (m[2] && !date) return bot_send(chatId, 'Не розумію дату. Приклад: 12.09.2026');
   var res = bot_addPaymentRow_('manual-' + Utilities.getUuid().slice(0, 8), sum, date || undefined);
   bot_send(chatId, '✅ Оплату ' + bot_fmtMoney(sum) + ' від ' + bot_fmtDate(date || bot_today()) + ' додано (№' + res.no + ').' + (typeof res.balance === 'number' ? '\n💰 Борг: <b>' + bot_fmtMoney(res.balance) + '</b>' : ''));
+  bot_cmdAllocate(chatId);                                    // одразу пропонуємо розподіл (кнопкою)
 }
