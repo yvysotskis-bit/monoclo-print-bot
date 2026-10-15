@@ -416,3 +416,26 @@ test('C: реальна відповідь НП (тестова ТТН): без 
   const lost = Object.assign({}, cod, { BackwardDeliverySum: '0.00', BackwardDeliveryMoney: '0.00', BackwardDeliveryCargoType: '' });
   assert.ok(c.bot_npDiffDocs(cod, lost).includes('BackwardDeliverySum'));
 });
+
+test('C: НП віддає старий текст одразу після запису — повторне читання; якщо так і не збігся — у помилці видно, що повернула НП', () => {
+  const env = fresh(); env.docs[TEST] = npDoc(TEST);
+  let reads = 0, realUpdate = env.np.handler;
+  env.np.handler = (p) => {
+    if (p.calledMethod === 'getDocumentList') { reads++; const d = JSON.parse(JSON.stringify(env.docs[TEST])); if (reads === 2) d.AdditionalInformation = env.docs[TEST]._pending ? '' : d.AdditionalInformation; return [d]; }
+    return realUpdate(p);
+  };
+  // 1) затримка: перше читання після запису ще старе
+  env.docs[TEST].AdditionalInformation = '';
+  let delayed = true;
+  env.np.handler = (p) => {
+    if (p.calledMethod === 'update') { env.pending = p.methodProperties.AdditionalInformation; return [{ Ref: env.docs[TEST].Ref, IntDocNumber: TEST }]; }
+    if (p.calledMethod === 'getDocumentList') { const d = JSON.parse(JSON.stringify(env.docs[TEST])); if (env.pending !== undefined) { if (delayed) delayed = false; else d.AdditionalInformation = env.pending; } return [d]; }
+    return [];
+  };
+  assert.equal(env.ctx.bot_npWriteDesc(TEST, 'тест 123').state, 'written');
+  // 2) НП так і не оновила — помилка містить фактичне значення
+  const env2 = fresh(); env2.docs[TEST] = npDoc(TEST); env2.docs[TEST].AdditionalInformation = 'Вввв';
+  env2.np.handler = (p) => p.calledMethod === 'update' ? [{ Ref: 'r', IntDocNumber: '20450000000999' }] : (p.calledMethod === 'getDocumentList' ? [JSON.parse(JSON.stringify(env2.docs[TEST]))] : []);
+  const res = env2.ctx.bot_npWriteDesc(TEST, 'тест 123');
+  assert.equal(res.state, 'error'); assert.match(res.error, /Вввв/); assert.match(res.error, /ІНШИЙ номер ТТН/);
+});

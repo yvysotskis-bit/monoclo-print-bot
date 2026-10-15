@@ -3494,6 +3494,12 @@ function bot_npHas_(v) { return v !== undefined && v !== null && v !== '' && !(A
 
 function bot_npIsZero_(v) { return typeof v !== 'object' && /^\s*0+([.,]0+)?\s*$/.test(String(v)); }
 
+/** Порівняння тексту без різниці в пробілах по краях / подвійних пробілах. */
+function bot_npSameText_(a, b) {
+  var n = function (x) { return String(x === undefined || x === null ? '' : x).replace(/\s+/g, ' ').trim(); };
+  return n(a) === n(b);
+}
+
 function bot_npDateOnly_(s) {
   var m = String(s || '').match(/^\d{2}\.\d{2}\.\d{4}/);
   return m ? m[0] : String(s || '');
@@ -3574,17 +3580,25 @@ function bot_npWriteDesc(ttn, text) {
     var doc = bot_npGetDoc(ttn);
     if (!doc) return { state: 'error', error: 'НП не знайшла ТТН ' + ttn + ' у вашому кабінеті' };
     var ref = doc.Ref;
-    if (String(doc.AdditionalInformation || '') === text) return { state: 'same', ref: ref };      // ідемпотентність
+    if (bot_npSameText_(doc.AdditionalInformation, text)) return { state: 'same', ref: ref };      // ідемпотентність
     var b = bot_npBuildPayload(doc, text);
     if (b.missing.length) {
       return { state: 'error', ref: ref, error: 'НП не повернула поля: ' + b.missing.join(', ') + ' — нічого не записано (запустіть /npdoc ' + ttn + ')', docKeys: Object.keys(doc) };
     }
-    bot_npCall_('InternetDocument', 'update', b.payload);
-    var after = bot_npGetDoc(ttn);
+    var upd = bot_npCall_('InternetDocument', 'update', b.payload);
+    var updInfo = (upd && upd[0]) ? upd[0] : {};
+    // НП інколи віддає старе значення одразу після запису — читаємо до 4 разів із паузою
+    var after = null;
+    for (var attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0 && typeof Utilities !== 'undefined' && Utilities.sleep) Utilities.sleep(2000);
+      after = bot_npGetDoc(ttn);
+      if (after && bot_npSameText_(after.AdditionalInformation, text)) break;
+    }
     if (!after) return { state: 'error', ref: ref, error: 'Після запису НП не повернула документ — перевірте ТТН у кабінеті' };
     var changed = bot_npDiffDocs(doc, after);
-    if (String(after.AdditionalInformation || '') !== text) {
-      return { state: 'error', ref: ref, changed: changed, error: 'НП прийняла запит, але «Додаткова інформація» не збіглась із надісланим текстом' };
+    if (!bot_npSameText_(after.AdditionalInformation, text)) {
+      var newNo = updInfo.IntDocNumber && bot_normTtn(updInfo.IntDocNumber) !== ttn ? ' ⚠ НП повернула ІНШИЙ номер ТТН: ' + updInfo.IntDocNumber + ' (Ref ' + (updInfo.Ref || '') + ')' + '.' : '';
+      return { state: 'error', ref: ref, changed: changed, error: 'НП прийняла запит (відповідь: ' + Object.keys(updInfo).join(', ') + '), але «Додаткова інформація» після запису: «' + String(after.AdditionalInformation || '(порожньо)') + '», а надсилали «' + text + '».' + newNo };
     }
     if (changed.length) {
       return { state: 'error', ref: ref, changed: changed, error: 'Після запису змінились інші поля: ' + changed.join(', ') + ' — перевірте ТТН у кабінеті НП!' };
