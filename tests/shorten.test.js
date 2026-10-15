@@ -89,10 +89,10 @@ test('Приклад з розділу 2 розбирається без зау�
   assert.equal(l[3].colorCode, 3);
 });
 
-test('х1/х3/х4 — код кольору худі (чорний/графітовий/сірий); х2 не вгадуємо; собівартість не множиться', () => {
+test('х1/х3/х4 — код кольору худі (чорний/білий/графітовий/сірий); х2 білий; собівартість не множиться', () => {
   const c = (x) => B.bot_parseOrderMessage(`15600. Принт A\nХуді ${x} БЕЗ ФЛІСУ\nM\n${TTN}`)[0];
   assert.equal(c('x1').color, 'Чорний'); assert.equal(c('х3').color, 'Графітовий'); assert.equal(c('x4').color, 'Сірий');
-  assert.equal(c('x2').color, ''); assert.equal(c('x2').colorCode, 2); assert.deepEqual(JSON.parse(JSON.stringify(c('x2').issues)), []);
+  assert.equal(c('x2').color, 'Білий'); assert.equal(c('x2').colorCode, 2); assert.deepEqual(JSON.parse(JSON.stringify(c('x2').issues)), []);
   const row = B.bot_buildOrderFields_(c('х3'), new Date(), [{ type: 'Худі не утеплене', price: 740, from: null }], 'В роботі');
   assert.equal(row.fields.cost, 740);
 });
