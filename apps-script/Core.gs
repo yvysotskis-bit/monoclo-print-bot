@@ -197,6 +197,7 @@ function bot_parseTypeColor(text) {
   if (/[а-яіїєґ]/.test(t)) t = bot_deLatin_(t);            // змішані латиниця + кирилиця → кирилиця
   var res = { type: '', color: bot_normColor(t), ambiguous: false, found: false };
   if (/стік[еи]р\s*-?\s*пак/.test(t)) { res.type = 'Стікерпак'; res.found = true; res.color = ''; return res; }
+  if (/^кепк/.test(t)) { res.type = 'Кепка'; res.found = true; res.color = ''; return res; }
   if (/футболк/.test(t)) { res.type = 'Футболка'; res.found = true; return res; }
   if (/худі|худи/.test(t)) {
     res.found = true;
@@ -229,6 +230,9 @@ function bot_countPrints(printText) {
 // Розбір підпису замовлення з групи (розділ 4.2)
 // =====================================================================
 
+/** Кількість: «x3» / «х3» / «×3» окремим словом (не «XL», не «2XL»). */
+var BOT_QTY_RE_ = /(^|\s)[xXхХ×]\s*(\d{1,2})(?=\s|$|[^\dA-Za-zА-Яа-яІіЇїЄєҐґ])/;
+
 var BOT_PREFIX_RE_ = /^[\s❗‼⚠️!]*(терміново[\s:!—\-]*)?/i;
 
 /** Рядок початку замовлення: «1538. Принт …», «1542 Принт …», «❗️ТЕРМІНОВО 1520. Принт …». → {no, rest} | null */
@@ -251,11 +255,14 @@ function bot_parseOrderSegment_(lines) {
   var st = bot_orderStart_(lines[0]);
   var res = {
     ok: true, no: st.no, print: st.rest, prints: bot_countPrints(st.rest), type: '', typeAmbiguous: false, color: '',
-    size: '', placement: '', ttn: '', issues: [], ttnShared: false
+    size: '', placement: '', ttn: '', issues: [], ttnShared: false, qty: 1, urgent: false
   };
   var badTtn = '', extras = [];
   for (var i = 1; i < lines.length; i++) {
     var line = lines[i];
+    var qm = line.match(BOT_QTY_RE_);                    // «x3», «х3» (латиниця й кирилиця) — кількість; x1 нічого не змінює
+    if (qm) { res.qty = Math.max(1, parseInt(qm[2], 10)); line = bot_trim(line.replace(BOT_QTY_RE_, '$1')); if (!line) continue; }
+    if (/(^|[^а-яіїєґ])два\s+принт/i.test(line)) { res.prints = 2; continue; }   // окремий рядок «ДВА ПРИНТА»
     var digits = line.replace(/[\s ]/g, '').replace(/^(ттн|тт|№)[:\-]?/i, '');
 
     if (/^\d{8,}$/.test(digits)) {                      // рядок із самих цифр — це ТТН
@@ -278,13 +285,15 @@ function bot_parseOrderSegment_(lines) {
     extras.push(line);                                  // напр. «FC BARCA (PERED) W - ПЕРЕД» — опис принта
   }
   if (!res.type && /стік[еи]р\s*-?\s*пак/i.test(bot_deLatin_(res.print.toLowerCase()))) res.type = 'Стікерпак';   // «1500. Стікерпак Ландо Норріс»
+  if (!res.type && /^кепк/i.test(bot_deLatin_(res.print.toLowerCase()))) res.type = 'Кепка';                          // «15100. Кепка Ferrari - 0132»
   if (/^принти?\s*$/i.test(res.print) && extras.length) res.print = res.print + ' ' + extras.join(' / ');
 
   if (!res.type) {
     res.issues.push({ field: 'type', text: res.typeAmbiguous ? 'Худі: не вказано «з флісом» чи «без флісу»' : 'не вказано вид речі (футболка / худі)' });
   }
   var noSz = BOT_NO_SIZE_COLOR_TYPES.indexOf(res.type) >= 0;
-  if (!res.color && !noSz) res.issues.push({ field: 'color', text: 'не вказано колір' });
+  // колір обов'язковий лише для футболки: у повідомленнях склад не пише колір худі
+  if (!res.color && !noSz && res.type !== 'Худі фліс' && res.type !== 'Худі не утеплене' && !res.typeAmbiguous) res.issues.push({ field: 'color', text: 'не вказано колір' });
   if (!res.size && !noSz) res.issues.push({ field: 'size', text: 'не вказано розмір' });
   if (!res.ttn) {
     res.issues.push({ field: 'ttn', text: badTtn ? 'ТТН «' + badTtn + '» — не 14 цифр' : 'немає ТТН' });
@@ -304,6 +313,7 @@ function bot_parseOrderMessage(text) {
     if (bot_orderStart_(l)) { cur = [l]; segs.push(cur); } else if (cur) cur.push(l);
   });
   var out = segs.map(bot_parseOrderSegment_);
+  if (/терміново/i.test(String(text))) out.forEach(function (o) { o.urgent = true; });   // «ТЕРМІНОВО» де завгодно в повідомленні
   for (var i = out.length - 2; i >= 0; i--) {           // спільна ТТН внизу діє на всі замовлення вище
     if (!out[i].ttn && out[i + 1].ttn) {
       out[i].ttn = out[i + 1].ttn; out[i].ttnShared = true;

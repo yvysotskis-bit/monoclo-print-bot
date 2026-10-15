@@ -34,11 +34,11 @@ test('Налаштування: усі аркуші, заголовки за Т�
   const env = fresh();
   ['Підсумки', 'Замовлення', 'Оплати', 'Прайс', 'Довідники', 'Звірки', 'Звірки_деталі', 'Місячні звіти', 'Налаштування', 'Лог'].forEach(n => assert.ok(env.sheet(n), n));
   const h = env.sheet('Замовлення').getRange(1, 1, 1, 21).getValues()[0];
-  assert.deepEqual(h.slice(0, 20), ['№ замовлення', 'Дата замовлення', 'Принт', 'Тип речі', 'Колір', 'Розмір', 'Розміщення принту', 'Принтів', 'ТТН', 'Дата створення ТТН', 'Етап доставки', 'Статус НП', 'Собівартість, грн', 'Статус замовлення', 'Оплата', 'Дата оплати', 'Звірка', 'Примітка', 'msg_id', 'Дата передачі НП']);
-  assert.deepEqual(env.rows('Прайс').map(r => r.slice(0, 2)), [['Футболка', 420], ['Худі фліс', 740], ['Худі не утеплене', 740], ['Стікерпак', 0]]);
+  assert.deepEqual(h.slice(0, 21), ['№ замовлення', 'Дата замовлення', 'Принт', 'Тип речі', 'Колір', 'Розмір', 'Розміщення принту', 'Принтів', 'Кількість', 'ТТН', 'Дата створення ТТН', 'Етап доставки', 'Статус НП', 'Собівартість, грн', 'Статус замовлення', 'Оплата', 'Дата оплати', 'Звірка', 'Примітка', 'msg_id', 'Дата передачі НП']);
+  assert.deepEqual(env.rows('Прайс').map(r => r.slice(0, 2)), [['Футболка', 420], ['Худі фліс', 740], ['Худі не утеплене', 740], ['Стікерпак', 0], ['Кепка', 0]]);
   env.setup();                                           // повторний запуск нічого не ламає і не дублює
-  assert.equal(env.rows('Прайс').length, 4);
-  assert.equal(env.sheet('Налаштування').getLastRow(), 13);
+  assert.equal(env.rows('Прайс').length, 5);
+  assert.equal(env.sheet('Налаштування').getLastRow(), 18);
 });
 
 test('Приймання: повідомлення 1538 → рядок за ≤1 хв, 👌; файл принта і «++++++» ігноруються', () => {
@@ -526,7 +526,7 @@ test('Команди: /find, /borg, /history, /price (з підтверджен�
   assert.match(q.text, /Додати нову ціну/);
   env.update(cb(q.reply_markup.inline_keyboard[0][0].callback_data, q.message_id)); env.poll();
   const prices = env.rows('Прайс');
-  assert.equal(prices.length, 5); assert.equal(prices[4][0], 'Худі фліс'); assert.equal(prices[4][1], 780);
+  assert.equal(prices.length, 6); assert.equal(prices[5][0], 'Худі фліс'); assert.equal(prices[5][1], 780);
   // старі рядки не змінені, нове замовлення 14.11 — за старою ціною, 16.11 — за новою
   assert.equal(env.ctx.bot_priceFor(env.ctx.bot_readPriceRows(), 'Худі фліс', env.ctx.bot_makeDate(2026, 11, 14)), 740);
   assert.equal(env.ctx.bot_priceFor(env.ctx.bot_readPriceRows(), 'Худі фліс', env.ctx.bot_makeDate(2026, 11, 16)), 780);
@@ -646,7 +646,7 @@ test('Кнопка «📋 Деталі» показує повний списо�
 test('Список «Тип речі» — звичайні значення з «Прайсу» (без формул); новий тип з /price з’являється в ньому', () => {
   const env = fresh();
   const list = () => env.sheet('Довідники').getRange(2, 1, 6, 1).getValues().map(r => r[0]).filter(Boolean);
-  assert.deepEqual(list(), ['Футболка', 'Худі фліс', 'Худі не утеплене', 'Стікерпак']);
+  assert.deepEqual(list(), ['Футболка', 'Худі фліс', 'Худі не утеплене', 'Стікерпак', 'Кепка']);
   assert.ok(!String(env.sheet('Довідники').getRange(2, 1).getValue()).startsWith('='));
   env.update(privMsg('/price Кепка 300 01.11.2026')); env.poll();
   const q = env.lastSent();
