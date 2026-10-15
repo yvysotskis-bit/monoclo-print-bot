@@ -50,7 +50,7 @@ function bot_buildSummary() {
   sh.getRange('G5').setValue('Замовлення після').setFontColor('#999999');
   sh.getRange('H5').setFormula(bot_fx('=' + D('OPENING_ORDERS_AFTER'))).setNumberFormat('dd.mm.yyyy').setFontColor('#999999');
   sh.getRange('G7').setValue('Поріг «червоного», %').setFontColor('#999999');
-  sh.getRange('H7').setFormula(bot_fx('=IFERROR(VALUE(' + S('PAY_RED_PERCENT') + '),10)')).setFontColor('#999999');
+  sh.getRange('H7').setFormula(bot_fx('=IFERROR(VALUE(SUBSTITUTE(' + S('PAY_RED_PERCENT') + ',"%","")),10)')).setFontColor('#999999');
   sh.getRange('G6').setValue('Оплати після').setFontColor('#999999');
   sh.getRange('H6').setFormula(bot_fx('=' + D('OPENING_PAYS_AFTER'))).setNumberFormat('dd.mm.yyyy').setFontColor('#999999');
   sh.getRange('A6').setFormula(bot_fx('=IF($H$4>0,"У собівартість і борг входить початковий залишок "&TEXT($H$4,"# ##0")&" грн (борг станом на 31.08.2026 з оплатами по 08.09.2026 включно)","")')).setFontColor('#666666').setFontStyle('italic');
@@ -128,7 +128,7 @@ function bot_buildSummary() {
   sh.getRange(BOT_SUM_SPEED_ROW, 1, 1, 3).setValues([['Показник', 'Поточний місяць', 'Останні 7 днів']]).setFontWeight('bold');
   ['ТТН у вибірці', 'Середній термін, дн', 'Медіана, дн', 'Передано за ≤1 день', 'Передано за 2 дні', 'Передано за 3+ дні', 'Найдовша ТТН (№ · днів)']
     .forEach(function (label, i) { sh.getRange(BOT_SUM_SPEED_ROW + 1 + i, 1).setValue(label); });
-  sh.getRange(BOT_SUM_SPEED_ROW + 9, 1).setValue('Рахується від замовлень, прийнятих ботом; імпортовані рядки без дати замовлення не враховуються.').setFontColor('#888888');
+  sh.getRange(BOT_SUM_SPEED_ROW + 8, 1).setValue('Рахується від замовлень, прийнятих ботом; імпортовані рядки без дати замовлення не враховуються.').setFontColor('#888888');
 
   // ---- По місяцях (12 останніх) ----
   var mr = 39;

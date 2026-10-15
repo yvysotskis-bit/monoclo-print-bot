@@ -370,7 +370,7 @@ function bot_onCommand(msg, c) {
     case 'month': return bot_cmdMonth(chatId, c.arg);
     case 'desc': return bot_cmdDesc(chatId, c.arg);
     case 'backfill': return bot_cmdBackfill(chatId);
-    case 'addpay': return bot_cmdAddPay(chatId, c.arg);
+    case 'addpay': return bot_cmdAddPay(chatId, c.arg, msg);
     case 'allocate': return bot_cmdAllocate(chatId);
     case 'undoalloc': return bot_cmdUndoAlloc(chatId, c.arg);
     case 'setdesc': return bot_cmdSetDesc(chatId, c.arg);
@@ -387,7 +387,7 @@ function bot_onCommand(msg, c) {
 
 /** /bind orders | /bind report — запам'ятати цю гілку. */
 function bot_cmdBind(msg, arg) {
-  var what = String(arg || '').trim().toLowerCase();
+  var what = String(arg || '').trim().toLowerCase().replace(/\s+force$/, '');
   var chatId = msg.chat.id, thread = bot_threadOf(msg);
   var opts = thread !== '0' ? { thread: thread } : {};
   if (what === 'registry') what = 'report';
@@ -405,6 +405,11 @@ function bot_cmdBind(msg, arg) {
   if (what !== 'orders' && what !== 'report') {
     var r0 = bot_send(chatId, 'Напишіть <code>/bind orders</code> (гілка «Замовлення на клієнта»), <code>/bind registry</code> (гілка «Реєстри») або <code>/bind payments</code> (чат «Отправка отчет»).', opts);
     if (r0.ok) bot_scheduleDelete(chatId, r0.result.message_id, 15);
+    return;
+  }
+  var curGroup = bot_setting('GROUP_CHAT_ID');
+  if (curGroup && String(curGroup) !== String(chatId) && !/force/i.test(String(arg))) {          // захист: /bind в іншій групі мовчки зламав би прийом замовлень
+    bot_sendToOwners('⛔ Чат виробництва вже прив\'язано (' + curGroup + '), а це інша група (' + chatId + '). Щоб ПЕРЕНЕСТИ на цю групу, напишіть <code>/bind ' + what + ' force</code>.');
     return;
   }
   bot_withLock(function () {

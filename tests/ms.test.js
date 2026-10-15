@@ -460,7 +460,7 @@ test('Розподіл оплат на ТТН: черга від старіши�
   mk(14603, '20451000000012', 420, d(9, 3));                                                 // ТТН3: 420
   mk(14604, '20451000000013', 420, d(9, 4), { status: 'Скасовано' });                          // скасоване — пропуск
   const pay = (sum, date) => c.bot_addPaymentRow_('t' + sum, sum, date);
-  pay(1000, d(9, 5)); pay(600, d(9, 9));                                                      // разом 1600: покриває ТТН1 (840) і ТТН2 (840+740=1580), на ТТН3 бракує 400
+  pay(1000, d(9, 9)); pay(600, d(9, 10));                                                      // разом 1600: покриває ТТН1 (840) і ТТН2 (840+740=1580), на ТТН3 бракує 400
   const plan = c.bot_planAllocation(c.bot_readOrders(), c.bot_readPayments(), c.bot_openingFromSettings());
   assert.equal(plan.pool, 1600); assert.equal(plan.covered.length, 2); assert.equal(plan.leftover, 20); assert.equal(plan.nextNeed, 400);
   assert.equal(plan.covered[0].ttn, '20451000000010'); assert.equal(plan.covered[1].ttn, '20451000000011');
@@ -750,4 +750,91 @@ test('Аудит: реєстр — збій позначки ТТН після �
   env2.update(groupMsg(MSG1)); env2.setNow('2026-10-08T07:00:00Z'); env2.poll(); env2.poll();
   assert.equal(env2.scans.length, 2);                                                      // новий реєстр створено, не заблокований старим
   assert.equal(env2.sheet('Реєстри').getRange(3, 7).getValue(), 'Надіслано');
+});
+
+test('Аудит: розбір оплат — строгий (телефон, дата, сума > 10 млн, неоднозначні числа відхиляються; нормальні — ні)', () => {
+  const P = fresh().ctx.bot_parsePayText;
+  const ok = { '+15к': 15000, '+ 21 401': 21401, '+14300': 14300, '+10 000': 10000, '+14,5к': 14500, '+1.5к': 1500, '+1 500,50': 1500.5, '+25.000': 25000, '+10к грн': 10000, '+1500.50': 1500.5, '+1,5': 1.5 };
+  Object.keys(ok).forEach(k => assert.equal(P(k), ok[k], k));
+  ['+380501234567', '+380 50 123 45 67', '+1.234,56', '+1,234.56', '+1.5.5', '+1,5,5', '+10.09', '+15.09', '+0', '+0.004', '+', '+abc', '+10 000 000 000', 'Пораховано+', '+15к к'].forEach(k => assert.equal(P(k), null, k));
+});
+
+test('Аудит: /addpay — повтор того самого оновлення не додає другу оплату (навіть якщо пропозиція розподілу впала)', () => {
+  const env = fresh(); const c = env.ctx; env.props.BOT_ENABLED = '1';
+  const realAlloc = c.bot_cmdAllocate; c.bot_cmdAllocate = () => { throw new Error('збій після запису'); };
+  const u = env.update(privMsg('/addpay 1000 12.10.2026')); env.poll();
+  assert.equal(c.bot_readPayments().length, 1);
+  c.bot_cmdAllocate = realAlloc;
+  env.update(Object.assign({}, { message: Object.assign({}, u.message) })); env.poll();                   // те саме повідомлення ще раз
+  assert.equal(c.bot_readPayments().length, 1);
+  assert.equal(c.bot_parseDate('31.02.2026'), null);                                                      // неіснуюча дата
+});
+
+test('Аудит: розподіл — кнопка містить лише підпис (ліміт 9 КБ властивостей), застарілу кнопку відхиляє, оплати до зрізу не витрачаються на ТТН', () => {
+  const env = fresh(); const c = env.ctx;
+  c.bot_setSetting('OPENING_DEBT', '1000'); c.bot_setSetting('OPENING_ORDERS_AFTER', '31.08.2026'); c.bot_setSetting('OPENING_PAYS_AFTER', '08.09.2026');
+  const d = (m, dd) => c.bot_makeDate(2026, m, dd);
+  const mk = (no, ttn, cost, date, extra) => c.bot_appendOrderRow(Object.assign({ no, date, print: 'A', type: 'Футболка', color: 'Чорний', size: 'M', placement: 'Позаду', prints: 1, ttn, cost, status: 'В роботі', paid: 'Не оплачено', msgId: String(no) }, extra), []);
+  for (let i = 0; i < 450; i++) mk(14600 + i, '2045' + String(1000000000 + i).padStart(10, '0'), 420, d(9, 1 + (i % 20)));
+  c.bot_addPaymentRow_('p1', 100000, d(9, 5));                                                            // до зрізу оплат (08.09) — не витрачається на ТТН
+  c.bot_addPaymentRow_('p2', 420 * 3, d(9, 12));
+  const plan = c.bot_planAllocation(c.bot_readOrders(), c.bot_readPayments(), c.bot_openingFromSettings());
+  assert.equal(plan.pool, 1260); assert.equal(plan.covered.length, 3);
+  // ліміт Script Properties: значення ≤ 9 КБ
+  const realProps = c.PropertiesService.getScriptProperties; const store = Object.assign({}, env.props);
+  c.PropertiesService.getScriptProperties = () => ({ getProperty: k => (k in store ? store[k] : null), setProperty: (k, v) => { if (String(v).length > 9216) throw new Error('Argument too large: value'); store[k] = String(v); }, deleteProperty: k => { delete store[k]; } });
+  env.props.TG_TOKEN = '123:ABCDEFGHIJKLMNOPQRSTUVWXYZ'; c.bot_setSetting('OWNER_IDS', String(OWNER));
+  c.bot_addPaymentRow_('p3', 420 * 440, d(9, 13));
+  const big = c.bot_planAllocation(c.bot_readOrders(), c.bot_readPayments(), c.bot_openingFromSettings());
+  assert.ok(big.covered.length > 400);
+  c.bot_cmdAllocate(OWNER);                                                                               // не падає на 400+ ТТН
+  const q = env.lastSent();
+  assert.ok(q.reply_markup, 'пропозиція надіслана');
+  // застаріла кнопка: після пропозиції скасували замовлення → нічого не позначається
+  c.bot_cmdCancel(OWNER, '14600');
+  env.update(cb(q.reply_markup.inline_keyboard[0][0].callback_data, q.message_id)); env.poll();
+  assert.ok(c.bot_readOrders().every(o => o.paid === 'Не оплачено'));
+  assert.match(env.tg.edits[env.tg.edits.length - 1].text, /Дані змінились/);
+  c.PropertiesService.getScriptProperties = realProps;
+});
+
+test('Аудит: розподіл — «Спірна» ТТН не покривається і не з\'їдає гроші; «Оплачено» не рахується двічі', () => {
+  const env = fresh(); const c = env.ctx; const d = (m, dd) => c.bot_makeDate(2026, m, dd);
+  const mk = (no, ttn, cost, date, paid) => c.bot_appendOrderRow({ no, date, print: 'A', type: 'Футболка', color: 'Чорний', size: 'M', placement: 'Позаду', prints: 1, ttn, cost, status: 'В роботі', paid: paid || 'Не оплачено', msgId: String(no) }, []);
+  mk(14600, '20451000000001', 420, d(9, 1), 'Спірна'); mk(14601, '20451000000002', 420, d(9, 2));
+  c.bot_addPaymentRow_('p', 420, d(9, 10));
+  const plan = c.bot_planAllocation(c.bot_readOrders(), c.bot_readPayments(), null);
+  assert.equal(plan.covered.length, 1); assert.equal(plan.covered[0].ttn, '20451000000002');
+});
+
+test('Аудит: імпорт оплат з експорту — відправники (з перенесенням на «joined»), фільтр PAY_EXPORT_FROM', () => {
+  const env = fresh(); const c = env.ctx;
+  const html = ['Юрій', null, 'Склад'].map((from, i) => `<div class="message default clearfix" id="message${100 + i}"><div class="body"><div class="pull_right date details" title="12 жовтня 2026, 10:0${i}:00">10:0${i}</div>${from ? `<div class="from_name">\n${from}\n</div>` : ''}<div class="text">\n+${1000 + i}\n</div></div></div>`).join('');
+  const msgs = c.bot_parseTelegramExport(html);
+  assert.deepEqual([...msgs.map(m => m.from)], ['Юрій', 'Юрій', 'Склад']);                                     // joined-повідомлення успадковує автора
+  const all = c.bot_planPayImport(msgs, { after: null, existingIds: [] });
+  assert.equal(all.rows.length, 3); assert.deepEqual(Object.keys(all.senders).sort(), ['Склад', 'Юрій']);
+  const only = c.bot_planPayImport(msgs, { after: null, existingIds: [], onlyFrom: 'Юрій' });
+  assert.equal(only.rows.length, 2); assert.equal(only.skippedSender, 1);
+});
+
+test('Аудит: місячний борг узгоджений із /borg (зріз за датою замовлення, а не ТТН); залишок видно з місяця зрізу', () => {
+  const env = fresh(); const c = env.ctx;
+  c.bot_setSetting('OPENING_DEBT', '1000'); c.bot_setSetting('OPENING_ORDERS_AFTER', '31.08.2026'); c.bot_setSetting('OPENING_PAYS_AFTER', '08.09.2026');
+  const op = c.bot_openingFromSettings(); const d = (m, dd) => c.bot_makeDate(2026, m, dd);
+  const orders = [{ date: d(8, 30), ttnDate: d(9, 2), cost: 420, status: 'В роботі', type: 'Футболка', print: 'A' }, { date: d(9, 3), cost: 100, status: 'В роботі', type: 'Футболка', print: 'B' }];
+  const debt = c.bot_computeDebt(orders, [], op).debt;
+  assert.equal(debt, 1100);
+  assert.equal(c.bot_monthMetrics(orders, [], 2026, 9, op).debtEnd, 1100);                                // раніше 1520 (420 враховувалось двічі)
+  assert.equal(c.bot_monthMetrics(orders, [], 2026, 8, op).debtEnd, 1000);                                // серпень: залишок, а не 0
+});
+
+test('Аудит: /bind в ІНШІЙ групі не перезаписує чат виробництва без force', () => {
+  const env = fresh(); const c = env.ctx;
+  const other = -1005555555555;
+  env.update({ message: { message_id: ++mid, date: ts('2026-10-07T05:00:00Z'), chat: { id: other, type: 'supergroup' }, from: { id: OWNER }, is_topic_message: true, message_thread_id: 3, text: '/bind orders' } }); env.poll();
+  assert.equal(c.bot_setting('GROUP_CHAT_ID'), String(GROUP));
+  assert.ok(env.sentTo(OWNER).some(s => /вже прив/.test(s.text)));
+  env.update({ message: { message_id: ++mid, date: ts('2026-10-07T05:00:00Z'), chat: { id: other, type: 'supergroup' }, from: { id: OWNER }, is_topic_message: true, message_thread_id: 3, text: '/bind orders force' } }); env.poll();
+  assert.equal(c.bot_setting('GROUP_CHAT_ID'), String(other));
 });

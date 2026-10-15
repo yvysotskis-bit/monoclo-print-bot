@@ -160,7 +160,7 @@ function bot_sendStorageReportToOwners_() {
 function bot_sendMonthly_(chatId, y, m, silentOnEmpty) {
   var orders = bot_readOrders(), pays = bot_readPayments();
   var op = bot_openingFromSettings();
-  var redPct = Number(bot_setting('PAY_RED_PERCENT', '10'));
+  var redPct = parseFloat(String(bot_setting('PAY_RED_PERCENT', '10')).replace('%', '').replace(',', '.'));
   var cur = bot_monthMetrics(orders, pays, y, m, op); cur.redPct = redPct;
   var pv = bot_prevYm(y, m);
   var prev = bot_monthMetrics(orders, pays, pv.y, pv.m, op);

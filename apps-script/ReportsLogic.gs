@@ -203,7 +203,7 @@ function bot_monthMetrics(orders, payments, y, m, opening) {
   rows.forEach(function (o) { if (byType[o.type] !== undefined) byType[o.type]++; else if (o.type === 'Стікерпак') stickers++; });
   var cost = bot_sumBy_(rows, function (o) { return Number(o.cost) || 0; });
   var paid = bot_sumBy_(payments.filter(function (p) { return bot_inMonth_(p.date, y, m); }), function (p) { return Number(p.sum) || 0; });
-  var ordersD = opening ? orders.filter(function (o) { return bot_afterCut_(bot_rowMonthDate_(o), opening.ordersAfter); }) : orders;   // раніші — вже в початковому залишку
+  var ordersD = opening ? orders.filter(function (o) { return bot_afterCut_(o.date, opening.ordersAfter); }) : orders;   // зріз — за датою ЗАМОВЛЕННЯ (як у /borg і «Підсумках»); раніші — вже в початковому залишку
   var paysD = opening ? payments.filter(function (p) { return bot_afterCut_(p.date, opening.paysAfter); }) : payments;
   var costToEnd = bot_sumBy_(ordersD, function (o) {
     var d = bot_rowMonthDate_(o);
@@ -215,7 +215,7 @@ function bot_monthMetrics(orders, payments, y, m, opening) {
   var speed = bot_computeSpeed(orders, new Date(monthStartN * 86400000 + 12 * 3600000), new Date(nextStartN * 86400000 + 12 * 3600000));
   return {
     y: y, m: m, items: rows.length, byType: byType, stickers: stickers, cost: cost, paid: paid,
-    debtEnd: bot_round2(costToEnd - paidToEnd + (opening && opening.paysAfter && nextStartN > bot_dayNum(opening.paysAfter) ? opening.debt : 0)),
+    debtEnd: bot_round2(costToEnd - paidToEnd + (opening && nextStartN > bot_dayNum(opening.ordersAfter || opening.paysAfter || new Date(0)) ? opening.debt : 0)),
     refusals: refusals.length, refusalsSum: bot_sumBy_(refusals, function (o) { return Number(o.cost) || 0; }),
     refusalPct: finals.length ? Math.round(refusals.length / finals.length * 1000) / 10 : 0,
     top: bot_topPrints(rows, 10), speed: speed

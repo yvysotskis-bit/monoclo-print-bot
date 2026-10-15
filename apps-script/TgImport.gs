@@ -34,7 +34,7 @@ function bot_htmlToText_(h) {
 /** messages.html → [{id, service, text, date, replyTo, from, edited}] */
 function bot_parseTelegramExport(html) {
   var blocks = String(html).split('<div class="message ').slice(1);
-  var out = [];
+  var out = [], lastFrom = '';
   blocks.forEach(function (b) {
     var idm = b.match(/id="message(-?\d+)"/);
     if (!idm) return;
@@ -47,7 +47,8 @@ function bot_parseTelegramExport(html) {
       var tm = b.match(/<div class="text">\s*([\s\S]*?)\s*<\/div>/);
       msg.text = tm ? bot_htmlToText_(tm[1]) : '';
       var fm = b.match(/<div class="from_name">\s*([\s\S]*?)\s*<\/div>/);
-      msg.from = fm ? bot_htmlToText_(fm[1]).trim() : '';
+      msg.from = fm ? bot_htmlToText_(fm[1]).trim() : lastFrom;       // «joined»-повідомлення (підряд від того ж автора) не мають імені — беремо попереднє
+      if (fm) lastFrom = msg.from;
       var rm = b.match(/GoToMessage\((\d+)\)/);
       msg.replyTo = rm ? parseInt(rm[1], 10) : null;
       var dm = b.match(/class="pull_right date details" title="([^"]+)"([^>]*)>([^<]*)/);

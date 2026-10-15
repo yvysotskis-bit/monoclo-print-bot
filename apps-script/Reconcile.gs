@@ -560,8 +560,12 @@ function bot_addPaymentRow_(reconId, sum, dateOpt) {
     var existing = last >= 2 ? sh.getRange(2, map.recon, last - 1, 1).getValues() : [];
     for (var i = 0; i < existing.length; i++) if (String(existing[i][0]) === reconId) return { duplicate: true, row: i + 2 };
     var nos = last >= 2 ? sh.getRange(2, map.no, last - 1, 1).getValues() : [];
+    var dts = last >= 2 ? sh.getRange(2, map.date, last - 1, 1).getValues() : [], sms = last >= 2 ? sh.getRange(2, map.sum, last - 1, 1).getValues() : [];
     var lastNo = 0, lastRow = 1;
-    nos.forEach(function (r, i) { var n = Number(r[0]); if (r[0] !== '' && !isNaN(n)) { lastNo = Math.max(lastNo, n); lastRow = i + 2; } });
+    nos.forEach(function (r, i) {
+      var n = Number(r[0]); if (r[0] !== '' && !isNaN(n)) lastNo = Math.max(lastNo, n);
+      if ((r[0] !== '' && !isNaN(n)) || (dts[i] && dts[i][0] !== '') || (sms[i] && sms[i][0] !== '')) lastRow = i + 2;      // рядок, внесений вручну без «№», не затираємо
+    });
     var row = lastRow + 1;
     var width = sh.getLastColumn();
     if (row > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 50);

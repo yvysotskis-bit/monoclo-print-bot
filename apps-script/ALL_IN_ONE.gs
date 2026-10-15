@@ -184,6 +184,7 @@ var BOT_DEFAULT_SETTINGS = [
   ['PAY_CHAT_ID', '', 'ID чату «Отправка отчет» (ставиться командою /bind payments у тому чаті): повідомлення власника «+10 000» стають оплатами'],
   ['PAY_THREAD_ID', '', 'ID гілки чату оплат (якщо чат з гілками)'],
   ['REGISTRY_USERS', '5411130511, 5814974771, 1143277277, 632064984, 1225142225, 307680605', 'Telegram ID людей з виробництва (через кому), яким дозволено викликати /registry у гілці «Реєстри» (створити реєстр у будь-який час). ID людина дізнається командою /id'],
+  ['PAY_EXPORT_FROM', '', 'Імпорт оплат з експорту чату: брати лише повідомлення цих відправників (імена з експорту через кому). Порожньо — усі (бот покаже перелік відправників)'],
   ['DESC_LIMIT', '100', 'Максимум символів в описі ТТН (Додаткова інформація в Новій пошті)'],
   ['DESC_FROM_ORDER', '15088', 'Описи й реєстр — лише для ТТН, де є замовлення з номером БІЛЬШЕ за це (старіші бот не чіпає)'],
   ['NP_MODE', 'перевірка', 'Режим запису в Нову пошту: «перевірка» (нічого не пишемо, лише надсилаємо власнику) або «бойовий»'],
@@ -321,6 +322,7 @@ function bot_parseDate(v) {
     y = +m[1]; mo = +m[2]; d = +m[3]; h = +(m[4] || 0); mi = +(m[5] || 0); sec = +(m[6] || 0);
   }
   if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  if (new Date(Date.UTC(y, mo - 1, d)).getUTCDate() !== d) return null;             // 31.02 тощо — не існує
   var base = bot_makeDate(y, mo, d);
   return new Date(base.getTime() + ((h * 60 + mi) * 60 + sec) * 1000);
 }
@@ -1558,7 +1560,7 @@ function bot_onCommand(msg, c) {
     case 'month': return bot_cmdMonth(chatId, c.arg);
     case 'desc': return bot_cmdDesc(chatId, c.arg);
     case 'backfill': return bot_cmdBackfill(chatId);
-    case 'addpay': return bot_cmdAddPay(chatId, c.arg);
+    case 'addpay': return bot_cmdAddPay(chatId, c.arg, msg);
     case 'allocate': return bot_cmdAllocate(chatId);
     case 'undoalloc': return bot_cmdUndoAlloc(chatId, c.arg);
     case 'setdesc': return bot_cmdSetDesc(chatId, c.arg);
@@ -1575,7 +1577,7 @@ function bot_onCommand(msg, c) {
 
 /** /bind orders | /bind report — запам'ятати цю гілку. */
 function bot_cmdBind(msg, arg) {
-  var what = String(arg || '').trim().toLowerCase();
+  var what = String(arg || '').trim().toLowerCase().replace(/\s+force$/, '');
   var chatId = msg.chat.id, thread = bot_threadOf(msg);
   var opts = thread !== '0' ? { thread: thread } : {};
   if (what === 'registry') what = 'report';
@@ -1593,6 +1595,11 @@ function bot_cmdBind(msg, arg) {
   if (what !== 'orders' && what !== 'report') {
     var r0 = bot_send(chatId, 'Напишіть <code>/bind orders</code> (гілка «Замовлення на клієнта»), <code>/bind registry</code> (гілка «Реєстри») або <code>/bind payments</code> (чат «Отправка отчет»).', opts);
     if (r0.ok) bot_scheduleDelete(chatId, r0.result.message_id, 15);
+    return;
+  }
+  var curGroup = bot_setting('GROUP_CHAT_ID');
+  if (curGroup && String(curGroup) !== String(chatId) && !/force/i.test(String(arg))) {          // захист: /bind в іншій групі мовчки зламав би прийом замовлень
+    bot_sendToOwners('⛔ Чат виробництва вже прив\'язано (' + curGroup + '), а це інша група (' + chatId + '). Щоб ПЕРЕНЕСТИ на цю групу, напишіть <code>/bind ' + what + ' force</code>.');
     return;
   }
   bot_withLock(function () {
@@ -3122,8 +3129,12 @@ function bot_addPaymentRow_(reconId, sum, dateOpt) {
     var existing = last >= 2 ? sh.getRange(2, map.recon, last - 1, 1).getValues() : [];
     for (var i = 0; i < existing.length; i++) if (String(existing[i][0]) === reconId) return { duplicate: true, row: i + 2 };
     var nos = last >= 2 ? sh.getRange(2, map.no, last - 1, 1).getValues() : [];
+    var dts = last >= 2 ? sh.getRange(2, map.date, last - 1, 1).getValues() : [], sms = last >= 2 ? sh.getRange(2, map.sum, last - 1, 1).getValues() : [];
     var lastNo = 0, lastRow = 1;
-    nos.forEach(function (r, i) { var n = Number(r[0]); if (r[0] !== '' && !isNaN(n)) { lastNo = Math.max(lastNo, n); lastRow = i + 2; } });
+    nos.forEach(function (r, i) {
+      var n = Number(r[0]); if (r[0] !== '' && !isNaN(n)) lastNo = Math.max(lastNo, n);
+      if ((r[0] !== '' && !isNaN(n)) || (dts[i] && dts[i][0] !== '') || (sms[i] && sms[i][0] !== '')) lastRow = i + 2;      // рядок, внесений вручну без «№», не затираємо
+    });
     var row = lastRow + 1;
     var width = sh.getLastColumn();
     if (row > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 50);
@@ -3241,18 +3252,31 @@ function bot_cmdFiles(chatId) {
  * Це лише рядки в аркуші «Оплати» (борг падає); статус «Оплачено» у замовленнях бот так не ставить — лише кнопкою зі звірки.
  */
 
-/** «+15к» → 15000, «+ 21 401» → 21401, «+14,5к» → 14500, «+10 000 грн» → 10000. Не оплата → null. */
+/** Найбільша сума одного платежу, яку приймаємо без підтвердження (захист від номера телефону, дати тощо). */
+var BOT_PAY_MAX_ = 10000000;
+
+/**
+ * «+15к» → 15000, «+ 21 401» → 21401, «+14,5к» → 14500, «+10 000 грн» → 10000, «+1 500,50» → 1500.5.
+ * Не оплата → null: порожнє, 0, > 10 млн (напр. номер телефону), неоднозначні числа («+1.234,56», «+1.5.5»), схожі на дату («+10.09»).
+ */
 function bot_parsePayText(text) {
-  var m = String(text || '').replace(/[  ]/g, ' ').trim().match(/^\+\s*(\d[\d\s.,]*?)\s*(к|k|тис\.?)?\s*(грн|₴)?\.?$/i);
+  var m = String(text || '').replace(/[\u00a0\u202f]/g, ' ').trim().match(/^\+\s*(\d[\d\s.,]*?)\s*(к|k|тис\.?)?\s*(грн|₴)?\.?$/i);
   if (!m) return null;
-  var num = m[1].replace(/\s+/g, ''), thousands = !!m[2], v;
-  if (/[.,]/.test(num)) {
-    if (!thousands && /^\d{1,3}([.,]\d{3})+$/.test(num)) v = Number(num.replace(/[.,]/g, ''));
-    else v = parseFloat(num.replace(',', '.'));
-  } else v = Number(num);
-  if (!isFinite(v) || v <= 0) return null;
-  if (thousands) v *= 1000;
-  return bot_round2(v);
+  var raw = m[1].trim(), thousands = !!m[2], v;
+  if (thousands) {
+    if (!/^\d{1,6}(?:[.,]\d{1,3})?$/.test(raw)) return null;                    // «15», «14,5», «1.250»
+    v = parseFloat(raw.replace(',', '.')) * 1000;
+  } else if (/^\d{1,3}(?:[ ]\d{3})+(?:[.,]\d{1,2})?$/.test(raw)) {              // «21 401», «1 500,50»
+    v = parseFloat(raw.replace(/ /g, '').replace(',', '.'));
+  } else if (/^[1-9]\d{0,2}(?:\.\d{3})+$/.test(raw)) {                                // «25.000» — крапка як роздільник тисяч
+    v = Number(raw.replace(/\./g, ''));
+  } else if (/^\d+(?:[.,]\d{1,2})?$/.test(raw)) {                                // «14300», «1,5», «1500.50»
+    if (/^\d{1,2}[.,]\d{2}$/.test(raw)) return null;                           // «+10.09» схоже на дату — не вгадуємо (для малих сум є /addpay)
+    v = parseFloat(raw.replace(',', '.'));
+  } else return null;
+  v = bot_round2(v);
+  if (!isFinite(v) || v <= 0 || v > BOT_PAY_MAX_) return null;
+  return v;
 }
 
 /**
@@ -3262,7 +3286,8 @@ function bot_parsePayText(text) {
 function bot_planPayImport(messages, opts) {
   opts = opts || {};
   var have = {}; (opts.existingIds || []).forEach(function (k) { have[k] = true; });
-  var plan = { rows: [], skippedOld: 0, skippedExisting: 0, unclear: [], total: 0 };
+  var plan = { rows: [], skippedOld: 0, skippedExisting: 0, unclear: [], total: 0, senders: {}, skippedSender: 0 };
+  var only = String(opts.onlyFrom || '').split(/[,;]+/).map(function (x) { return x.trim().toLowerCase(); }).filter(Boolean);
   messages.slice().sort(function (a, b) { return a.id - b.id; }).forEach(function (m) {
     if (m.service || !m.text) return;
     var t = m.text.trim();
@@ -3270,10 +3295,13 @@ function bot_planPayImport(messages, opts) {
     var sum = bot_parsePayText(t);
     if (sum === null) { plan.unclear.push(t.slice(0, 60)); return; }
     var d = m.date || new Date();
+    var who = m.from || '(невідомо)';
+    if (only.length && only.indexOf(String(m.from || '').toLowerCase()) < 0) { plan.skippedSender++; return; }     // PAY_EXPORT_FROM: лише повідомлення цих відправників
     if (!bot_afterCut_(d, opts.after)) { plan.skippedOld++; return; }
     var key = 'tg-' + m.id;
     if (have[key]) { plan.skippedExisting++; return; }
-    plan.rows.push({ key: key, id: m.id, date: d, sum: sum, text: t });
+    plan.senders[who] = (plan.senders[who] || 0) + 1;
+    plan.rows.push({ key: key, id: m.id, date: d, sum: sum, text: t, from: who });
     plan.total += sum;
   });
   return plan;
@@ -3283,6 +3311,9 @@ function bot_payPlanText(plan, done) {
   var L = [done ? '✅ Оплати додано' : 'Знайдено в експорті'];
   L.push((done ? 'Додано' : 'Буде додано') + ' оплат: ' + plan.rows.length + ' на ' + bot_fmtMoney(plan.total) + ' (оплати до 08.09 йдуть лише в покриття місяця, у борг не рахуються). Пропущено: до вересня ' + plan.skippedOld + ', уже є в таблиці ' + plan.skippedExisting + '.');
   plan.rows.slice(0, 30).forEach(function (r) { L.push('• ' + bot_fmtDate(r.date) + ' — ' + bot_fmtMoney(r.sum) + '  («' + r.text + '»)'); });
+  var sn = Object.keys(plan.senders || {});
+  if (sn.length) L.push('Відправники: ' + sn.map(function (k) { return k + ' — ' + plan.senders[k]; }).join('; ') + (sn.length > 1 ? '  ⚠️ ЯКЩО Є ЧУЖІ — скасуйте й задайте в «Налаштуваннях» PAY_EXPORT_FROM (імена відправників через кому).' : ''));
+  if (plan.skippedSender) L.push('Пропущено за відправником: ' + plan.skippedSender);
   if (plan.unclear.length) L.push('⚠️ Не зрозумів суму: ' + plan.unclear.join(' | '));
   return L.join('\n');
 }
@@ -3309,7 +3340,7 @@ function bot_menuPayImport() {
   if (r.getSelectedButton() !== ui.Button.OK) return;
   try {
     var op = bot_openingFromSettings();
-    var plan = bot_planPayImport(bot_tgReadMessages_(r.getResponseText()), { after: op ? op.ordersAfter : null, existingIds: bot_existingPayKeys_() });
+    var plan = bot_planPayImport(bot_tgReadMessages_(r.getResponseText()), { after: op ? op.ordersAfter : null, existingIds: bot_existingPayKeys_(), onlyFrom: bot_setting('PAY_EXPORT_FROM', '') });
     if (!plan.rows.length) { bot_alert_('Нових оплат немає', bot_payPlanText(plan, false)); return; }
     if (ui.alert('Додати оплати?', bot_payPlanText(plan, false) + '\n\nДодати їх в аркуш «Оплати»?', ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
     var n = bot_payImportApply(plan);
@@ -3360,41 +3391,45 @@ function bot_handlePayMessage(msg, edited) {
   } else {
     head = '💰 Оплату з чату «Отправка отчет» внесено: <b>' + bot_fmtMoney(sum) + '</b> від ' + bot_fmtDate(date) + (typeof res.balance === 'number' ? '\nБорг: <b>' + bot_fmtMoney(res.balance) + '</b>' : '');
   }
-  bot_sendToOwners(head);
+  try { bot_sendToOwners(head); } catch (e) { bot_log('УВАГА', 'сповіщення про оплату з чату', e.message); }
   bot_ownerIds().forEach(function (id) { try { bot_cmdAllocate(id); } catch (e) { bot_log('УВАГА', 'розподіл після оплати з чату', e.message); } });
 }
 
 /** /addpay <сума> [дата] — одна оплата вручну. Дата за замовчуванням — сьогодні. */
-function bot_cmdAddPay(chatId, arg) {
+function bot_cmdAddPay(chatId, arg, msg) {
   var m = String(arg || '').trim().match(/^(\S+)(?:\s+(\d{1,2}[.\-\/]\d{1,2}[.\-\/]\d{4}))?$/);
   var sum = m ? bot_parsePayText('+' + m[1]) : null;
   if (sum === null) return bot_send(chatId, 'Формат: <code>/addpay 21401 12.09.2026</code> (дата необов\'язкова; «15к» = 15000).');
   var date = m[2] ? bot_parseDate(m[2]) : null;
   if (m[2] && !date) return bot_send(chatId, 'Не розумію дату. Приклад: 12.09.2026');
-  var res = bot_addPaymentRow_('manual-' + Utilities.getUuid().slice(0, 8), sum, date || undefined);
+  var key = 'manual-' + (msg && msg.message_id ? msg.message_id : Utilities.getUuid().slice(0, 8));      // ключ з id повідомлення: повтор того самого оновлення не додасть другу оплату
+  var res = bot_addPaymentRow_(key, sum, date || undefined);
+  if (res.duplicate) return bot_send(chatId, 'ℹ️ Ця оплата вже внесена (повтор команди).');
   bot_send(chatId, '✅ Оплату ' + bot_fmtMoney(sum) + ' від ' + bot_fmtDate(date || bot_today()) + ' додано (№' + res.no + ').' + (typeof res.balance === 'number' ? '\n💰 Борг: <b>' + bot_fmtMoney(res.balance) + '</b>' : ''));
-  bot_cmdAllocate(chatId);                                    // одразу пропонуємо розподіл (кнопкою)
+  try { bot_cmdAllocate(chatId); } catch (e) { bot_log('УВАГА', 'розподіл після /addpay', e.message); }      // пропозиція розподілу — best-effort, оплата вже внесена
 }
 
 
 // ======================= Allocate.gs =======================
 /**
- * Allocate.gs — розподіл оплат на ТТН. Виробництво не присилає платежі «за ТТН»: власник вносить суми, які вважає потрібними.
+ * Allocate.gs — розподіл оплат на ТТН. Виробництво не присилає платежі «за ТТН», власник вносить суми, які вважає потрібними.
  * Бот пропонує, які ТТН ці суми покривають (за чергою: від старіших до новіших), і ставить «Оплачено» ЛИШЕ після натискання кнопки.
+ * Кнопка перераховує розподіл заново (дані могли змінитись) і застосовує його, лише якщо він збігається з тим, що власник бачив.
  * Чиста логіка (bot_planAllocation) — без Google API.
  */
 
 /**
  * Черга: ТТН за датою замовлення, потім за номером. Кожна ТТН покрита, коли накопичена собівартість черги ≤ усіх оплат.
- * Береться лише те, що ПІСЛЯ зрізу початкового залишку (замовлення > OPENING_ORDERS_AFTER; оплати > OPENING_ORDERS_AFTER),
- * тобто так само, як «Покриття собівартості» на «Підсумках».
- * @return {pool, totalCost, covered:[{ttn, rowNums:[], cost, paidDate}], coveredCost, alreadyPaid, leftover, nextTtn, nextNeed}
+ * Береться те, що ПІСЛЯ зрізу початкового залишку: замовлення > OPENING_ORDERS_AFTER, оплати > OPENING_PAYS_AFTER
+ * (раніші оплати вже зменшили початковий залишок — вдруге на ТТН їх не витрачаємо, як і в розрахунку боргу).
+ * ТТН зі «Спірною» оплатою пропускається (не покривається і не «з'їдає» гроші).
+ * @return {pool, totalCost, covered:[{ttn, rowNums:[], cost, paidDate, no}], coveredCost, alreadyPaid, leftover, nextTtn, nextNeed, sig}
  */
 function bot_planAllocation(orders, payments, opening) {
-  var cut = opening ? opening.ordersAfter : null;
-  var pays = payments.filter(function (p) { return bot_afterCut_(p.date, cut) && Number(p.sum) > 0; })
+  var cut = opening ? opening.ordersAfter : null, payCut = opening ? (opening.paysAfter || opening.ordersAfter) : null;
+  var pays = payments.filter(function (p) { return bot_afterCut_(p.date, payCut) && Number(p.sum) > 0; })
     .sort(function (a, b) { return (a.date ? a.date.getTime() : 0) - (b.date ? b.date.getTime() : 0); });
-  var pool = bot_sumBy_(pays, function (p) { return Number(p.sum) || 0; });
+  var pool = bot_round2(bot_sumBy_(pays, function (p) { return Number(p.sum) || 0; }));
   var groups = {}, list = [];
   orders.forEach(function (o) {
     if (o.status !== 'В роботі' || !o.ttn || !(Number(o.cost) > 0) || !bot_afterCut_(o.date, cut)) return;
@@ -3404,6 +3439,7 @@ function bot_planAllocation(orders, payments, opening) {
     if (o.date && o.date.getTime() < g.minDate) g.minDate = o.date.getTime();
     if ((Number(o.no) || 0) < g.minNo) g.minNo = Number(o.no) || 0;
   });
+  list = list.filter(function (g) { return !g.rows.some(function (o) { return o.paid === 'Спірна'; }); });
   list.sort(function (a, b) { return a.minDate - b.minDate || a.minNo - b.minNo; });
   var cum = 0, plan = { pool: pool, totalCost: 0, covered: [], coveredCost: 0, alreadyPaid: 0, leftover: 0, nextTtn: '', nextNeed: 0 };
   var stop = false;
@@ -3421,39 +3457,53 @@ function bot_planAllocation(orders, payments, opening) {
     } else { stop = true; plan.nextTtn = g.ttn; plan.nextNeed = bot_round2(cum - pool); }
   });
   plan.leftover = bot_round2(pool - plan.coveredCost);
+  plan.sig = bot_allocSig_(plan);
   return plan;
+}
+
+/** Підпис розподілу: за ним кнопка перевіряє, що власник підтверджує саме те, що бачив (дані за цей час не змінились). */
+function bot_allocSig_(plan) {
+  var s = plan.pool + '|' + plan.covered.length + '|' + plan.coveredCost + '|' + plan.covered.map(function (c) { return c.ttn; }).join(',');
+  var h = 0;
+  for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return String(h) + '.' + plan.covered.length;
 }
 
 function bot_allocText(plan, done) {
   var L = [done ? '✅ Позначено оплаченими' : '💳 <b>Розподіл оплат на ТТН</b> (від старіших до новіших)'];
-  L.push('Оплат з вересня: <b>' + bot_fmtMoney(plan.pool) + '</b> · собівартість ТТН з вересня: ' + bot_fmtMoney(plan.totalCost));
+  L.push('Оплат після ' + bot_setting('OPENING_PAYS_AFTER', 'початку') + ': <b>' + bot_fmtMoney(plan.pool) + '</b> · собівартість ТТН з вересня: ' + bot_fmtMoney(plan.totalCost));
   var sum = plan.covered.reduce(function (a, c) { return a + c.cost; }, 0);
   L.push((done ? 'Позначено' : 'Буде позначено') + ' «Оплачено»: <b>' + plan.covered.length + '</b> ТТН на ' + bot_fmtMoney(sum) + (plan.alreadyPaid ? ' (ще ' + plan.alreadyPaid + ' ТТН вже були оплачені)' : ''));
-  if (plan.covered.length) L.push('Від №' + plan.covered[0].no + ' до №' + plan.covered[plan.covered.length - 1].no);
+  if (plan.covered.length) {
+    var nos = plan.covered.map(function (c) { return c.no; });
+    L.push('№ від ' + Math.min.apply(null, nos) + ' до ' + Math.max.apply(null, nos));
+  }
   L.push('Залишок оплат, що не покрив наступну ТТН: ' + bot_fmtMoney(plan.leftover) + (plan.nextTtn ? ' (до наступної ТТН ' + plan.nextTtn + ' бракує ' + bot_fmtMoney(plan.nextNeed) + ')' : ''));
   return L.join('\n');
 }
 
-function bot_allocApply(rowNums, paidByRow, id) {
-  bot_withLock(function () {
+/** Застосувати розподіл. @return кількість змінених рядків */
+function bot_allocApply(plan, id) {
+  return bot_withLock(function () {
     var cur = {}; bot_readOrders().forEach(function (o) { cur[o._row] = o; });
     var patches = [];
-    rowNums.forEach(function (r) {
-      if (!cur[r] || cur[r].paid !== 'Не оплачено') return;            // змінилось, поки чекали кнопку — не чіпаємо
-      patches.push({ row: r, fields: { paid: 'Оплачено', paidDate: paidByRow[r] ? new Date(paidByRow[r]) : bot_today(), recon: id } });
+    plan.covered.forEach(function (c) {
+      c.rowNums.forEach(function (r) {
+        if (!cur[r] || cur[r].paid !== 'Не оплачено' || cur[r].status !== 'В роботі') return;       // змінилось, поки чекали кнопку — не чіпаємо
+        patches.push({ row: r, fields: { paid: 'Оплачено', paidDate: c.paidDate ? new Date(c.paidDate) : bot_today(), recon: id } });
+      });
     });
     bot_patchOrders(patches);
     bot_log('ІНФО', 'розподіл оплат ' + id, 'рядків: ' + patches.length);
+    return patches.length;
   });
 }
 
-/** /allocate — показати, що покривають внесені суми; «Оплачено» — лише після кнопки. */
+/** /allocate — показати, що покривають внесені суми; «Оплачено» — лише після кнопки. У кнопці — лише підпис (а не всі рядки). */
 function bot_cmdAllocate(chatId) {
   var plan = bot_planAllocation(bot_readOrders(), bot_readPayments(), bot_openingFromSettings());
   if (!plan.covered.length) return bot_send(chatId, bot_allocText(plan, false) + '\n\nНових ТТН для позначки немає.');
-  var rows = [], dates = {};
-  plan.covered.forEach(function (c) { c.rowNums.forEach(function (r) { rows.push(r); dates[r] = c.paidDate ? c.paidDate.getTime() : 0; }); });
-  var token = bot_pendingPut({ kind: 'alloc', rows: rows, dates: dates });
+  var token = bot_pendingPut({ kind: 'alloc', sig: plan.sig });
   bot_send(chatId, bot_allocText(plan, false), { keyboard: { inline_keyboard: [[{ text: '✅ Позначити оплаченими', callback_data: 'aly|' + token }, { text: 'Ні', callback_data: 'aln|' + token }]] } });
 }
 
@@ -3462,17 +3512,24 @@ function bot_allocCallback(parts, ctx) {
   if (!p) { bot_answerCb(ctx.cb.id, 'Кнопка застаріла'); return; }
   bot_pendingDrop(parts[1]);
   if (parts[0] === 'aln') { bot_edit(ctx.chatId, ctx.msgId, 'Скасовано, нічого не змінено.'); return bot_answerCb(ctx.cb.id, 'Скасовано'); }
-  var kp = bot_kyivParts(new Date());
-  var id = 'Розподіл-' + kp.y + bot_pad2(kp.m) + bot_pad2(kp.d) + '-' + bot_pad2(kp.h) + bot_pad2(kp.mi);
-  bot_allocApply(p.rows, p.dates, id);
-  var plan = bot_planAllocation(bot_readOrders(), bot_readPayments(), bot_openingFromSettings());
-  bot_edit(ctx.chatId, ctx.msgId, '✅ Позначено оплаченими рядків: ' + p.rows.length + '. Позначка в колонці «Звірка»: <code>' + id + '</code>. Скасувати: <code>/undoalloc ' + id + '</code>\n\nЗалишок оплат: ' + bot_fmtMoney(plan.leftover));
+  var res = bot_withLock(function () {                                      // розподіл рахуємо заново під блокуванням і порівнюємо з тим, що бачив власник
+    var plan = bot_planAllocation(bot_readOrders(), bot_readPayments(), bot_openingFromSettings());
+    if (plan.sig !== p.sig) return { changed: true };
+    var kp = bot_kyivParts(new Date());
+    var id = 'Розподіл-' + kp.y + bot_pad2(kp.m) + bot_pad2(kp.d) + '-' + bot_pad2(kp.h) + bot_pad2(kp.mi) + bot_pad2(kp.s || 0) + '-' + Utilities.getUuid().slice(0, 3);
+    return { n: bot_allocApply(plan, id), id: id, plan: plan };
+  });
+  if (res.changed) {
+    bot_edit(ctx.chatId, ctx.msgId, '⚠️ Дані змінились, поки ви чекали (нова оплата, скасування, зміна суми). Нічого не позначено — напишіть /allocate ще раз.');
+    return bot_answerCb(ctx.cb.id, 'Дані змінились');
+  }
+  bot_edit(ctx.chatId, ctx.msgId, '✅ Позначено оплаченими рядків: ' + res.n + '. Позначка в колонці «Звірка»: <code>' + res.id + '</code>. Скасувати: <code>/undoalloc ' + res.id + '</code>\n\nЗалишок оплат: ' + bot_fmtMoney(res.plan.leftover));
   bot_answerCb(ctx.cb.id, 'Готово');
 }
 
 function bot_cmdUndoAlloc(chatId, arg) {
   var id = String(arg || '').trim();
-  if (!/^Розподіл-/.test(id)) return bot_send(chatId, 'Формат: <code>/undoalloc Розподіл-20261016-1030</code> (ID з повідомлення про розподіл).');
+  if (!/^Розподіл-/.test(id)) return bot_send(chatId, 'Формат: <code>/undoalloc Розподіл-20261016-103015-a1b</code> (ID з повідомлення про розподіл).');
   var rows = bot_withLock(function () {
     var list = bot_readOrders().filter(function (o) { return o.recon === id && o.paid === 'Оплачено'; });
     bot_patchOrders(list.map(function (o) { return { row: o._row, fields: { paid: 'Не оплачено', paidDate: '', recon: '' } }; }));
@@ -4787,7 +4844,7 @@ function bot_monthMetrics(orders, payments, y, m, opening) {
   rows.forEach(function (o) { if (byType[o.type] !== undefined) byType[o.type]++; else if (o.type === 'Стікерпак') stickers++; });
   var cost = bot_sumBy_(rows, function (o) { return Number(o.cost) || 0; });
   var paid = bot_sumBy_(payments.filter(function (p) { return bot_inMonth_(p.date, y, m); }), function (p) { return Number(p.sum) || 0; });
-  var ordersD = opening ? orders.filter(function (o) { return bot_afterCut_(bot_rowMonthDate_(o), opening.ordersAfter); }) : orders;   // раніші — вже в початковому залишку
+  var ordersD = opening ? orders.filter(function (o) { return bot_afterCut_(o.date, opening.ordersAfter); }) : orders;   // зріз — за датою ЗАМОВЛЕННЯ (як у /borg і «Підсумках»); раніші — вже в початковому залишку
   var paysD = opening ? payments.filter(function (p) { return bot_afterCut_(p.date, opening.paysAfter); }) : payments;
   var costToEnd = bot_sumBy_(ordersD, function (o) {
     var d = bot_rowMonthDate_(o);
@@ -4799,7 +4856,7 @@ function bot_monthMetrics(orders, payments, y, m, opening) {
   var speed = bot_computeSpeed(orders, new Date(monthStartN * 86400000 + 12 * 3600000), new Date(nextStartN * 86400000 + 12 * 3600000));
   return {
     y: y, m: m, items: rows.length, byType: byType, stickers: stickers, cost: cost, paid: paid,
-    debtEnd: bot_round2(costToEnd - paidToEnd + (opening && opening.paysAfter && nextStartN > bot_dayNum(opening.paysAfter) ? opening.debt : 0)),
+    debtEnd: bot_round2(costToEnd - paidToEnd + (opening && nextStartN > bot_dayNum(opening.ordersAfter || opening.paysAfter || new Date(0)) ? opening.debt : 0)),
     refusals: refusals.length, refusalsSum: bot_sumBy_(refusals, function (o) { return Number(o.cost) || 0; }),
     refusalPct: finals.length ? Math.round(refusals.length / finals.length * 1000) / 10 : 0,
     top: bot_topPrints(rows, 10), speed: speed
@@ -5033,7 +5090,7 @@ function bot_sendStorageReportToOwners_() {
 function bot_sendMonthly_(chatId, y, m, silentOnEmpty) {
   var orders = bot_readOrders(), pays = bot_readPayments();
   var op = bot_openingFromSettings();
-  var redPct = Number(bot_setting('PAY_RED_PERCENT', '10'));
+  var redPct = parseFloat(String(bot_setting('PAY_RED_PERCENT', '10')).replace('%', '').replace(',', '.'));
   var cur = bot_monthMetrics(orders, pays, y, m, op); cur.redPct = redPct;
   var pv = bot_prevYm(y, m);
   var prev = bot_monthMetrics(orders, pays, pv.y, pv.m, op);
@@ -5117,7 +5174,7 @@ function bot_buildSummary() {
   sh.getRange('G5').setValue('Замовлення після').setFontColor('#999999');
   sh.getRange('H5').setFormula(bot_fx('=' + D('OPENING_ORDERS_AFTER'))).setNumberFormat('dd.mm.yyyy').setFontColor('#999999');
   sh.getRange('G7').setValue('Поріг «червоного», %').setFontColor('#999999');
-  sh.getRange('H7').setFormula(bot_fx('=IFERROR(VALUE(' + S('PAY_RED_PERCENT') + '),10)')).setFontColor('#999999');
+  sh.getRange('H7').setFormula(bot_fx('=IFERROR(VALUE(SUBSTITUTE(' + S('PAY_RED_PERCENT') + ',"%","")),10)')).setFontColor('#999999');
   sh.getRange('G6').setValue('Оплати після').setFontColor('#999999');
   sh.getRange('H6').setFormula(bot_fx('=' + D('OPENING_PAYS_AFTER'))).setNumberFormat('dd.mm.yyyy').setFontColor('#999999');
   sh.getRange('A6').setFormula(bot_fx('=IF($H$4>0,"У собівартість і борг входить початковий залишок "&TEXT($H$4,"# ##0")&" грн (борг станом на 31.08.2026 з оплатами по 08.09.2026 включно)","")')).setFontColor('#666666').setFontStyle('italic');
@@ -5195,7 +5252,7 @@ function bot_buildSummary() {
   sh.getRange(BOT_SUM_SPEED_ROW, 1, 1, 3).setValues([['Показник', 'Поточний місяць', 'Останні 7 днів']]).setFontWeight('bold');
   ['ТТН у вибірці', 'Середній термін, дн', 'Медіана, дн', 'Передано за ≤1 день', 'Передано за 2 дні', 'Передано за 3+ дні', 'Найдовша ТТН (№ · днів)']
     .forEach(function (label, i) { sh.getRange(BOT_SUM_SPEED_ROW + 1 + i, 1).setValue(label); });
-  sh.getRange(BOT_SUM_SPEED_ROW + 9, 1).setValue('Рахується від замовлень, прийнятих ботом; імпортовані рядки без дати замовлення не враховуються.').setFontColor('#888888');
+  sh.getRange(BOT_SUM_SPEED_ROW + 8, 1).setValue('Рахується від замовлень, прийнятих ботом; імпортовані рядки без дати замовлення не враховуються.').setFontColor('#888888');
 
   // ---- По місяцях (12 останніх) ----
   var mr = 39;
@@ -5685,7 +5742,7 @@ function bot_htmlToText_(h) {
 /** messages.html → [{id, service, text, date, replyTo, from, edited}] */
 function bot_parseTelegramExport(html) {
   var blocks = String(html).split('<div class="message ').slice(1);
-  var out = [];
+  var out = [], lastFrom = '';
   blocks.forEach(function (b) {
     var idm = b.match(/id="message(-?\d+)"/);
     if (!idm) return;
@@ -5698,7 +5755,8 @@ function bot_parseTelegramExport(html) {
       var tm = b.match(/<div class="text">\s*([\s\S]*?)\s*<\/div>/);
       msg.text = tm ? bot_htmlToText_(tm[1]) : '';
       var fm = b.match(/<div class="from_name">\s*([\s\S]*?)\s*<\/div>/);
-      msg.from = fm ? bot_htmlToText_(fm[1]).trim() : '';
+      msg.from = fm ? bot_htmlToText_(fm[1]).trim() : lastFrom;       // «joined»-повідомлення (підряд від того ж автора) не мають імені — беремо попереднє
+      if (fm) lastFrom = msg.from;
       var rm = b.match(/GoToMessage\((\d+)\)/);
       msg.replyTo = rm ? parseInt(rm[1], 10) : null;
       var dm = b.match(/class="pull_right date details" title="([^"]+)"([^>]*)>([^<]*)/);

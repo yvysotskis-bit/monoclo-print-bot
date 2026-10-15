@@ -95,6 +95,7 @@ function bot_parseDate(v) {
     y = +m[1]; mo = +m[2]; d = +m[3]; h = +(m[4] || 0); mi = +(m[5] || 0); sec = +(m[6] || 0);
   }
   if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  if (new Date(Date.UTC(y, mo - 1, d)).getUTCDate() !== d) return null;             // 31.02 тощо — не існує
   var base = bot_makeDate(y, mo, d);
   return new Date(base.getTime() + ((h * 60 + mi) * 60 + sec) * 1000);
 }
