@@ -4,6 +4,7 @@
  * Працює ЛИШЕ з повідомленнями гілки «Замовлення на клієнта»: інших ТТН у цьому аркуші просто не буває.
  */
 
+function bot_descMode() { return String(bot_setting('DESC_MODE', 'повний')).toLowerCase().indexOf('драб') === 0 ? 'ladder' : 'full'; }
 function bot_descLimit() { var n = Number(bot_setting('DESC_LIMIT', '100')); return n > 0 ? n : 100; }
 function bot_descFromOrder() { var n = Number(bot_setting('DESC_FROM_ORDER', '15088')); return isNaN(n) ? 0 : n; }
 
@@ -71,7 +72,7 @@ function bot_ttnSync(msg, caption, list, edited) {
   Object.keys(groups).forEach(function (ttn) {
     var g = groups[ttn];
     if (!g.some(function (p) { return p.no > fromNo; })) return;                     // старі замовлення бот не чіпає
-    var d = bot_buildDescription(g, limit);
+    var d = bot_buildDescription(g, limit, bot_descMode());
     var nos = g.map(function (p) { return p.no; }).join(', ');
     var rows = bot_readTtnRows(), ex = null;
     rows.forEach(function (r) { if (r.ttn === ttn) ex = r; });
@@ -127,7 +128,7 @@ function bot_cmdSetDesc(chatId, arg) {
   if (r.registry) return bot_send(chatId, '⛔ ТТН ' + bot_code(r.ttn) + ' уже в реєстрі №' + bot_esc(r.registry) + ' — опис не змінюю.');
   if (text === '-') {                                                    // повернутись до автоматичного
     var g = bot_parseOrderMessage(r.original).filter(function (p) { return p.ttn === r.ttn; });
-    var d = bot_buildDescription(g, bot_descLimit());
+    var d = bot_buildDescription(g, bot_descLimit(), bot_descMode());
     bot_ttnPatch([{ row: r._row, fields: { desc: d.text, len: d.len, status: d.overflow ? 'Чекає рішення' : 'Новий', note: '', written: '' } }]);
     return bot_send(chatId, '↩️ Повернув автоматичний опис: <i>' + bot_esc(d.text) + '</i> (' + d.len + ' симв.)');
   }
@@ -167,7 +168,7 @@ function bot_ttnBackfill() {
       var g = groups[ttn].sort(function (a, b) { return a.no - b.no; });
       if (!g.some(function (o) { return o.no > fromNo; })) return;
       var parsed = g.map(bot_orderAsParsed_);
-      var d = bot_buildDescription(parsed, limit);
+      var d = bot_buildDescription(parsed, limit, bot_descMode());
       var nos = g.map(function (o) { return o.no; }).join(', ');
       var first = g.filter(function (o) { return o.msgId; })[0];
       bot_ttnAppend({ ttn: ttn, orders: nos, original: '(відновлено з таблиці «Замовлення» — оригінального тексту повідомлення немає)', desc: d.text, len: d.len,

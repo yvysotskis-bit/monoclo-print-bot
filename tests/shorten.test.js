@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const { loadBot } = require('./helpers');
 const B = loadBot();
 const TTN = '20451556067718';
-const desc = text => B.bot_buildDescription(B.bot_parseOrderMessage(text));
+const desc = text => B.bot_buildDescription(B.bot_parseOrderMessage(text), 100, 'ladder');          // режим «драбина» (розділ 5 ТЗ)
+const descFull = text => B.bot_buildDescription(B.bot_parseOrderMessage(text), 100);                // формат за замовчуванням: повний або лише номери
 const len = s => [...s].length;
 
 // ---- еталони з розділу 5 ТЗ: точні рядки ----
@@ -104,4 +105,21 @@ test('Крайнє переповнення: послідовні номери �
   const blocks = Array.from({ length: 19 }, (_, i) => `${14732 + i}. Принт A\nХуді x1 БЕЗ ФЛІСУ\nXL\nПринт позаду`);
   const r = desc(`${blocks.join('\n\n')}\n\n${TTN}`);
   assert.equal(r.text, '14732-14750'); assert.equal(r.overflow, false); assert.ok(r.len <= 100);
+});
+
+test('Формат за замовчуванням: повний опис (x латинська, як у власника) або лише номери', () => {
+  assert.equal(descFull(`15037. Принт no-risk (W) Худі x3 ❗️БЕЗ ФЛІСУ S\n\nПринт позаду\n\n${TTN}`).text, '15037 No-Risk (W) худі x3 БЕЗ ФЛІСУ S, принт позаду');
+  // три футболки (111 символів повним форматом) → лише номери
+  const three = `14634. Принт Cuba Libre (W)\nФутболка чорна\nXL\nПринт позаду\n\n14635. Принт CV (W)\nФутболка чорна\nXL\nПринт позаду\n\n14636. Принт Bill\nФутболка чорна\nM\nПринт позаду\n\n${TTN}`;
+  const r = descFull(three);
+  assert.equal(r.text, '14634, 14635, 14636'); assert.equal(r.overflow, false);
+  // два замовлення, що вміщаються → обидва повні, через «. »
+  const two = `14858. Стікерпак Ландо Норріс\n\n14859. Принт McLaren 1963 (W) + Lando-Logo\nХуді x3 БЕЗ ФЛІСУ\nS\nПринти як на візуалі\n\n${TTN}`;
+  assert.equal(descFull(two).text, '14858 Стікерпак Ландо Норріс. 14859 McLaren 1963 (W)+Lando-Logo худі x3 БЕЗ ФЛІСУ S, як на візуалі');
+  assert.equal(descFull(`ТЕРМІНОВО\n15500. Принт Test\nФутболка біла\nL\nПринт позаду\n${TTN}`).text, 'ТЕРМІНОВО 15500 Test футболка біла L, принт позаду');
+  // 19 послідовних — діапазон; не влізло навіть так — потрібне рішення
+  const many = Array.from({ length: 19 }, (_, i) => `${14732 + i}. Принт A\nХуді x1 БЕЗ ФЛІСУ\nXL\nПринт позаду`).join('\n\n');
+  assert.equal(descFull(`${many}\n\n${TTN}`).text, '14732-14750');
+  const sparse = Array.from({ length: 30 }, (_, i) => `${15300 + i * 2}. Принт A\nФутболка чорна\nM\nПринт позаду`).join('\n\n');
+  assert.equal(descFull(`${sparse}\n\n${TTN}`).overflow, true);
 });

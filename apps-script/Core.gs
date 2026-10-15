@@ -254,6 +254,12 @@ function bot_cleanLines_(text) {
 
 function bot_parseOrderSegment_(lines) {
   var st = bot_orderStart_(lines[0]);
+  // Усе в одному рядку: «15037. Принт no-risk (W) Худі x3 ❗️БЕЗ ФЛІСУ S» → назва принта + окремий рядок «Худі x3 ❗️БЕЗ ФЛІСУ S»
+  var inl = st.rest.match(/^(.+?)\s+((?:футболк\S*|худі|худи)(?:\s.*)?)$/i);
+  if (inl && !/^(стік|кепк)/i.test(st.rest) && !lines.slice(1).some(function (l) { return bot_parseTypeColor(l).found; })) {
+    st = { no: st.no, rest: inl[1].trim() };
+    lines = [lines[0], inl[2].trim()].concat(lines.slice(1));
+  }
   var res = {
     ok: true, no: st.no, print: st.rest, prints: bot_countPrints(st.rest), type: '', typeAmbiguous: false, color: '',
     size: '', placement: '', ttn: '', issues: [], ttnShared: false, colorCode: 0, urgent: false
@@ -274,6 +280,7 @@ function bot_parseOrderSegment_(lines) {
     if (sz && !res.size && line.length <= 14) { res.size = sz; continue; }
 
     var tc = bot_parseTypeColor(line);
+    if (tc.found && !res.size) { var lastTok = line.split(/\s+/).pop(); if (line.split(/\s+/).length > 1) { var szT = bot_normSize(lastTok); if (szT) res.size = szT; } }   // розмір в кінці того ж рядка: «Худі x3 БЕЗ ФЛІСУ S»
     if (tc.found && !res.type && !res.typeAmbiguous) {
       if (tc.ambiguous) res.typeAmbiguous = true; else res.type = tc.type;
       if (tc.color) res.color = tc.color;

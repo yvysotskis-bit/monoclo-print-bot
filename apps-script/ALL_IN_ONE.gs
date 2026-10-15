@@ -180,6 +180,7 @@ var BOT_DEFAULT_SETTINGS = [
   ['OPENING_ORDERS_AFTER', '31.08.2026', 'У собівартість беруться замовлення з датою ПІСЛЯ цієї (раніші вже в початковому залишку)'],
   ['OPENING_PAYS_AFTER', '08.09.2026', 'В оплати беруться платежі з датою ПІСЛЯ цієї (до неї включно — вже в початковому залишку)'],
   ['PAY_RED_PERCENT', '10', 'Покриття місяця: оплачено менше собівартості, але не більше ніж на цей % — «жовтий» (недоплата); більше — «червоний» (велика різниця); не менше собівартості — «зелений»'],
+  ['DESC_MODE', 'повний', 'Формат опису: «повний» — повний опис кожного замовлення, а якщо не вміщається — лише номери замовлень; «драбина» — з проміжними скороченнями (чор, Всі позаду, без пробілів у назвах, без (W)/(B))'],
   ['DESC_LIMIT', '100', 'Максимум символів в описі ТТН (Додаткова інформація в Новій пошті)'],
   ['DESC_FROM_ORDER', '15088', 'Описи й реєстр — лише для ТТН, де є замовлення з номером БІЛЬШЕ за це (старіші бот не чіпає)'],
   ['NP_MODE', 'перевірка', 'Режим запису в Нову пошту: «перевірка» (нічого не пишемо, лише надсилаємо власнику) або «бойовий»'],
@@ -476,6 +477,12 @@ function bot_cleanLines_(text) {
 
 function bot_parseOrderSegment_(lines) {
   var st = bot_orderStart_(lines[0]);
+  // Усе в одному рядку: «15037. Принт no-risk (W) Худі x3 ❗️БЕЗ ФЛІСУ S» → назва принта + окремий рядок «Худі x3 ❗️БЕЗ ФЛІСУ S»
+  var inl = st.rest.match(/^(.+?)\s+((?:футболк\S*|худі|худи)(?:\s.*)?)$/i);
+  if (inl && !/^(стік|кепк)/i.test(st.rest) && !lines.slice(1).some(function (l) { return bot_parseTypeColor(l).found; })) {
+    st = { no: st.no, rest: inl[1].trim() };
+    lines = [lines[0], inl[2].trim()].concat(lines.slice(1));
+  }
   var res = {
     ok: true, no: st.no, print: st.rest, prints: bot_countPrints(st.rest), type: '', typeAmbiguous: false, color: '',
     size: '', placement: '', ttn: '', issues: [], ttnShared: false, colorCode: 0, urgent: false
@@ -496,6 +503,7 @@ function bot_parseOrderSegment_(lines) {
     if (sz && !res.size && line.length <= 14) { res.size = sz; continue; }
 
     var tc = bot_parseTypeColor(line);
+    if (tc.found && !res.size) { var lastTok = line.split(/\s+/).pop(); if (line.split(/\s+/).length > 1) { var szT = bot_normSize(lastTok); if (szT) res.size = szT; } }   // розмір в кінці того ж рядка: «Худі x3 БЕЗ ФЛІСУ S»
     if (tc.found && !res.type && !res.typeAmbiguous) {
       if (tc.ambiguous) res.typeAmbiguous = true; else res.type = tc.type;
       if (tc.color) res.color = tc.color;
@@ -1858,6 +1866,7 @@ function bot_priceCallback(parts, ctx) {
  * Shorten.gs — Модуль B: скорочення опису ТТН до ≤ 100 символів (розділ 5 ТЗ).
  * ЧИСТА логіка: жодних викликів Google API, перевіряється в Node.
  *
+ * Режим за замовчуванням — «повний або лише номери» (налаштування DESC_MODE = повний); режим «драбина» (mode === 'ladder') — драбина з розділу 5 ТЗ.
  * Вхід — масив замовлень з bot_parseOrderMessage (одне повідомлення = одна ТТН).
  * Вихід — {text, len, level, overflow}.
  *
@@ -1944,7 +1953,7 @@ function bot_renderItem_(it, o) {
   } else {
     parts.push('худі' + (it.washed ? ' виварене' : ''));   // колір худі несе код хN
   }
-  if (it.code > 1) parts.push('х' + it.code);          // код кольору худі: х2/х3/х4 (х1 = чорний, не пишемо)
+  if (it.code > 1) parts.push((o.latinX ? 'x' : 'х') + it.code);          // код кольору худі: х2/х3/х4 (х1 = чорний, не пишемо)
   if (it.kind === 'hoodie' && it.noFleece) parts.push('БЕЗ ФЛІСУ');
   if (it.size) parts.push(it.size);
   var s = parts.filter(Boolean).join(' ');
@@ -2019,10 +2028,21 @@ function bot_numberRanges(nos) {
  * Основна функція модуля B.
  * @return {text, len, level (1..6 — драбина, 7..9 — переповнення), overflow:boolean (не влізло навіть у номери)}
  */
-function bot_buildDescription(list, limit) {
+function bot_buildDescription(list, limit, mode) {
   limit = limit || BOT_DESC_LIMIT_DEFAULT;
   var items = bot_descItems(list);
   if (!items.length) return { text: '', len: 0, level: 0, overflow: false };
+  if (mode !== 'ladder') {
+    // Формат власника: повний опис кожного замовлення («15037 No-Risk (W) худі x3 БЕЗ ФЛІСУ S, принт позаду»);
+    // якщо не вміщається в ліміт — лише номери замовлень через кому (далі діапазон), без проміжних скорочень.
+    var full = bot_renderAll_(items, { hoist: false, keepStickerWord: true, latinX: true }, '');
+    if (bot_len(full) <= limit) return { text: full, len: bot_len(full), level: 1, overflow: false };
+    var nums = bot_overflowTexts_(items)[2];
+    if (bot_len(nums) <= limit) return { text: nums, len: bot_len(nums), level: 9, overflow: false };
+    var rg0 = bot_urgentPrefix_(items) + bot_numberRanges(items.map(function (i) { return i.no; }));
+    if (bot_len(rg0) <= limit) return { text: rg0, len: bot_len(rg0), level: 10, overflow: false };
+    return { text: nums, len: bot_len(nums), level: 9, overflow: true };
+  }
   var multi = items.length > 1;
   var canHoist = bot_canHoist_(items);
   for (var lv = 0; lv < BOT_LADDER_.length; lv++) {
@@ -3722,6 +3742,7 @@ function bot_cmdPreviewMode(chatId) {
  * Працює ЛИШЕ з повідомленнями гілки «Замовлення на клієнта»: інших ТТН у цьому аркуші просто не буває.
  */
 
+function bot_descMode() { return String(bot_setting('DESC_MODE', 'повний')).toLowerCase().indexOf('драб') === 0 ? 'ladder' : 'full'; }
 function bot_descLimit() { var n = Number(bot_setting('DESC_LIMIT', '100')); return n > 0 ? n : 100; }
 function bot_descFromOrder() { var n = Number(bot_setting('DESC_FROM_ORDER', '15088')); return isNaN(n) ? 0 : n; }
 
@@ -3789,7 +3810,7 @@ function bot_ttnSync(msg, caption, list, edited) {
   Object.keys(groups).forEach(function (ttn) {
     var g = groups[ttn];
     if (!g.some(function (p) { return p.no > fromNo; })) return;                     // старі замовлення бот не чіпає
-    var d = bot_buildDescription(g, limit);
+    var d = bot_buildDescription(g, limit, bot_descMode());
     var nos = g.map(function (p) { return p.no; }).join(', ');
     var rows = bot_readTtnRows(), ex = null;
     rows.forEach(function (r) { if (r.ttn === ttn) ex = r; });
@@ -3845,7 +3866,7 @@ function bot_cmdSetDesc(chatId, arg) {
   if (r.registry) return bot_send(chatId, '⛔ ТТН ' + bot_code(r.ttn) + ' уже в реєстрі №' + bot_esc(r.registry) + ' — опис не змінюю.');
   if (text === '-') {                                                    // повернутись до автоматичного
     var g = bot_parseOrderMessage(r.original).filter(function (p) { return p.ttn === r.ttn; });
-    var d = bot_buildDescription(g, bot_descLimit());
+    var d = bot_buildDescription(g, bot_descLimit(), bot_descMode());
     bot_ttnPatch([{ row: r._row, fields: { desc: d.text, len: d.len, status: d.overflow ? 'Чекає рішення' : 'Новий', note: '', written: '' } }]);
     return bot_send(chatId, '↩️ Повернув автоматичний опис: <i>' + bot_esc(d.text) + '</i> (' + d.len + ' симв.)');
   }
@@ -3885,7 +3906,7 @@ function bot_ttnBackfill() {
       var g = groups[ttn].sort(function (a, b) { return a.no - b.no; });
       if (!g.some(function (o) { return o.no > fromNo; })) return;
       var parsed = g.map(bot_orderAsParsed_);
-      var d = bot_buildDescription(parsed, limit);
+      var d = bot_buildDescription(parsed, limit, bot_descMode());
       var nos = g.map(function (o) { return o.no; }).join(', ');
       var first = g.filter(function (o) { return o.msgId; })[0];
       bot_ttnAppend({ ttn: ttn, orders: nos, original: '(відновлено з таблиці «Замовлення» — оригінального тексту повідомлення немає)', desc: d.text, len: d.len,

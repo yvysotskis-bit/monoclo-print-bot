@@ -2,6 +2,7 @@
  * Shorten.gs — Модуль B: скорочення опису ТТН до ≤ 100 символів (розділ 5 ТЗ).
  * ЧИСТА логіка: жодних викликів Google API, перевіряється в Node.
  *
+ * Режим за замовчуванням — «повний або лише номери» (налаштування DESC_MODE = повний); режим «драбина» (mode === 'ladder') — драбина з розділу 5 ТЗ.
  * Вхід — масив замовлень з bot_parseOrderMessage (одне повідомлення = одна ТТН).
  * Вихід — {text, len, level, overflow}.
  *
@@ -88,7 +89,7 @@ function bot_renderItem_(it, o) {
   } else {
     parts.push('худі' + (it.washed ? ' виварене' : ''));   // колір худі несе код хN
   }
-  if (it.code > 1) parts.push('х' + it.code);          // код кольору худі: х2/х3/х4 (х1 = чорний, не пишемо)
+  if (it.code > 1) parts.push((o.latinX ? 'x' : 'х') + it.code);          // код кольору худі: х2/х3/х4 (х1 = чорний, не пишемо)
   if (it.kind === 'hoodie' && it.noFleece) parts.push('БЕЗ ФЛІСУ');
   if (it.size) parts.push(it.size);
   var s = parts.filter(Boolean).join(' ');
@@ -163,10 +164,21 @@ function bot_numberRanges(nos) {
  * Основна функція модуля B.
  * @return {text, len, level (1..6 — драбина, 7..9 — переповнення), overflow:boolean (не влізло навіть у номери)}
  */
-function bot_buildDescription(list, limit) {
+function bot_buildDescription(list, limit, mode) {
   limit = limit || BOT_DESC_LIMIT_DEFAULT;
   var items = bot_descItems(list);
   if (!items.length) return { text: '', len: 0, level: 0, overflow: false };
+  if (mode !== 'ladder') {
+    // Формат власника: повний опис кожного замовлення («15037 No-Risk (W) худі x3 БЕЗ ФЛІСУ S, принт позаду»);
+    // якщо не вміщається в ліміт — лише номери замовлень через кому (далі діапазон), без проміжних скорочень.
+    var full = bot_renderAll_(items, { hoist: false, keepStickerWord: true, latinX: true }, '');
+    if (bot_len(full) <= limit) return { text: full, len: bot_len(full), level: 1, overflow: false };
+    var nums = bot_overflowTexts_(items)[2];
+    if (bot_len(nums) <= limit) return { text: nums, len: bot_len(nums), level: 9, overflow: false };
+    var rg0 = bot_urgentPrefix_(items) + bot_numberRanges(items.map(function (i) { return i.no; }));
+    if (bot_len(rg0) <= limit) return { text: rg0, len: bot_len(rg0), level: 10, overflow: false };
+    return { text: nums, len: bot_len(nums), level: 9, overflow: true };
+  }
   var multi = items.length > 1;
   var canHoist = bot_canHoist_(items);
   for (var lv = 0; lv < BOT_LADDER_.length; lv++) {

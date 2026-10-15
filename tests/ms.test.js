@@ -136,7 +136,7 @@ test('C: бойовий режим — запис в НП, статус «Зап
   const rows = ttnRows(env);
   assert.deepEqual([...rows.map(r => r.status)], ['Записано в НП', 'Записано в НП']);
   assert.equal(env.docs[T1].AdditionalInformation, rows[0].desc);
-  assert.equal(env.docs[T2].AdditionalInformation, '15093 No-Risk (W) худі х3 БЕЗ ФЛІСУ S, принт позаду');
+  assert.equal(env.docs[T2].AdditionalInformation, '15093 No-Risk (W) худі x3 БЕЗ ФЛІСУ S, принт позаду');
   env.updates = []; env.poll(); env.poll();
   assert.equal((env.updates || []).length, 0);
   // НП відмовляє
@@ -275,7 +275,7 @@ test('/backfill: ТТН замовлень з таблиці (імпорт) → 
   assert.equal(r.added, 1);
   const row = ttnRows(env)[0];
   assert.equal(row.ttn, T1); assert.equal(row.orders, '15100, 15101'); assert.equal(row.status, 'Новий'); assert.equal(row.msgId, '16000');
-  assert.ok(row.desc.includes('15100') && row.desc.includes('х3') && row.desc.includes('БЕЗ ФЛІСУ') && row.desc.includes('15101'));
+  assert.ok(row.desc.includes('15100') && row.desc.includes('x3') && row.desc.includes('БЕЗ ФЛІСУ') && row.desc.includes('15101'));
   assert.ok(row.len <= 100);
   assert.equal(c.bot_ttnBackfill().added, 0);                                      // повторно — нічого
   env.poll();                                                                       // режим перевірки → власнику
@@ -299,8 +299,8 @@ test('«Виварене»: розбір — худі/футболка/кепк�
   const prices = B.bot_readPriceRows();
   [hg, hs, cap, tee].forEach(p => assert.equal(B.bot_buildOrderFields_(p, new Date(), prices, 'В роботі').fields.cost, 1490));
   // опис: «виварене» і колір (код) не губляться
-  assert.equal(B.bot_buildDescription([hg]).text, '14900 без принта худі виварене х3 S');
-  assert.match(B.bot_buildDescription([hs]).text, /без принта худі виварене х4 S/);
+  assert.equal(B.bot_buildDescription([hg]).text, '14900 без принта худі виварене x3 S');
+  assert.match(B.bot_buildDescription([hs]).text, /без принта худі виварене x4 S/);
   assert.match(B.bot_buildDescription([tee]).text, /футболка чорна виварена M/);
 });
 
