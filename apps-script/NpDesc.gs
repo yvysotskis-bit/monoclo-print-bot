@@ -86,7 +86,8 @@ function bot_npDiffDocs(before, after) {
 
 function bot_npDocWindow_() {
   var now = new Date();
-  return { from: bot_fmtDate(new Date(now.getTime() - 120 * 86400000)), to: bot_fmtDate(new Date(now.getTime() + 86400000)) };
+  // НП: різниця DateTimeFrom–DateTimeTo не більше трьох місяців → беремо 80 днів назад + завтра (ТТН з гілки свіжі)
+  return { from: bot_fmtDate(new Date(now.getTime() - 80 * 86400000)), to: bot_fmtDate(new Date(now.getTime() + 86400000)) };
 }
 
 /** Документ за номером ТТН (InternetDocument.getDocumentList) або null. */

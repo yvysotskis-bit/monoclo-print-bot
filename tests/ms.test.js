@@ -231,3 +231,11 @@ test('D: назва файлу: діапазон, одне замовлення;
   e2.np.printBad = false; e2.poll();                                    // наступна хвилина: реєстр НЕ створюється вдруге
   assert.equal(e2.scans.length, 1); assert.equal(groupDocs(e2).length, 1);
 });
+
+test('C: вікно дат getDocumentList менше трьох місяців (обмеження НП)', () => {
+  const env = fresh();
+  const w = env.ctx.bot_npDocWindow_();
+  const d = (x) => { const [dd, mm, yy] = x.split('.').map(Number); return new Date(yy, mm - 1, dd); };
+  const days = (d(w.to) - d(w.from)) / 86400000;
+  assert.ok(days > 30 && days < 88, String(days));
+});
