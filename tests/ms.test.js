@@ -525,3 +525,26 @@ test('Екстрений реєстр: /registry now створює додатк
   assert.equal(groupDocs(env).length >= 2, true);
   assert.equal(ttnRows(env).find(r => r.ttn === T2).registry, '105-0002');
 });
+
+test('Чат «Отправка отчет»: /bind payments, «+10 000» власника → оплата автоматично; чужі/інші повідомлення ігноруються; повтор і редагування', () => {
+  const env = newEnv({}); env.setup(); const c = env.ctx;
+  env.props.TG_TOKEN = '123:ABCDEFGHIJKLMNOPQRSTUVWXYZ'; c.bot_setSetting('OWNER_IDS', String(OWNER));
+  c.bot_setSetting('OPENING_DEBT', '2227020'); c.bot_setSetting('OPENING_ORDERS_AFTER', '31.08.2026'); c.bot_setSetting('OPENING_PAYS_AFTER', '08.09.2026');
+  env.setNow('2026-10-12T16:35:00Z');
+  const PAY = -1009999999999;
+  const m = (text, from, id, kind) => ({ [kind || 'message']: { message_id: id, date: ts('2026-10-12T16:35:00Z'), chat: { id: PAY, type: 'supergroup', title: 'Отправка отчет' }, from: { id: from }, text } });
+  env.update(m('/bind payments', OWNER, 1)); env.poll();
+  assert.equal(c.bot_setting('PAY_CHAT_ID'), String(PAY));
+  assert.equal(env.sentTo(PAY).length, 0);                                              // у чаті оплат бот мовчить
+  env.update(m('+10 000', OWNER, 2)); env.poll();
+  assert.equal(c.bot_readPayments().length, 1); assert.equal(c.bot_readPayments()[0].sum, 10000);
+  assert.ok(env.sentTo(OWNER).some(s => /Оплату з чату/.test(s.text)));
+  assert.equal(env.sentTo(PAY).length, 0);
+  env.update(m('+5000', 999, 3)); env.update(m('Пораховано+', OWNER, 4)); env.update(m('привіт', OWNER, 5)); env.poll();
+  assert.equal(c.bot_readPayments().length, 1);                                         // чужий «+5000» і не-оплати — ігноруємо
+  env.update(m('+10 000', OWNER, 2)); env.poll();                                       // повторна обробка того ж повідомлення
+  assert.equal(c.bot_readPayments().length, 1);
+  env.update(m('+12 000', OWNER, 2, 'edited_message')); env.poll();                    // редагування суми
+  assert.equal(c.bot_readPayments().length, 1); assert.equal(c.bot_readPayments()[0].sum, 12000);
+  assert.ok(env.sentTo(OWNER).some(s => /виправлено/.test(s.text)));
+});

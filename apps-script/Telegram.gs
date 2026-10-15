@@ -294,6 +294,8 @@ function bot_onMessage(msg, edited) {
       if (!bot_isOwner(from.id)) return;
       return bot_cmdBind(msg, cmd.arg);
     }
+    var payChat = bot_setting('PAY_CHAT_ID');
+    if (payChat && String(chat.id) === String(payChat)) return bot_handlePayMessage(msg, edited);   // чат «Отправка отчет»
     var groupId = bot_setting('GROUP_CHAT_ID');
     if (!groupId || String(chat.id) !== String(groupId)) return;                       // чужа група
     var ordersThread = bot_setting('ORDERS_THREAD_ID');
@@ -385,8 +387,14 @@ function bot_cmdBind(msg, arg) {
   var chatId = msg.chat.id, thread = bot_threadOf(msg);
   var opts = thread !== '0' ? { thread: thread } : {};
   if (what === 'registry') what = 'report';
+  if (what === 'payments') {                                      // чат «Отправка отчет»: у ньому бот НІЧОГО не пише, підтвердження — лише власнику в особисті
+    bot_withLock(function () { bot_setSetting('PAY_CHAT_ID', chatId); bot_setSetting('PAY_THREAD_ID', thread); });
+    bot_log('ІНФО', 'bind payments', 'chat ' + chatId + ' thread ' + thread);
+    bot_sendToOwners('✅ Чат «' + bot_esc((msg.chat && msg.chat.title) || chatId) + '» підключено для оплат: повідомлення власника виду <code>+10 000</code>, <code>+15к</code> стануть оплатами. У тому чаті бот нічого не пише.');
+    return;
+  }
   if (what !== 'orders' && what !== 'report') {
-    var r0 = bot_send(chatId, 'Напишіть <code>/bind orders</code> (гілка «Замовлення на клієнта») або <code>/bind registry</code> (гілка «Реєстри»).', opts);
+    var r0 = bot_send(chatId, 'Напишіть <code>/bind orders</code> (гілка «Замовлення на клієнта»), <code>/bind registry</code> (гілка «Реєстри») або <code>/bind payments</code> (чат «Отправка отчет»).', opts);
     if (r0.ok) bot_scheduleDelete(chatId, r0.result.message_id, 15);
     return;
   }

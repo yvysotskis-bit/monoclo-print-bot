@@ -82,6 +82,51 @@ function bot_menuPayImport() {
   } catch (e) { bot_alert_('Не вдалося', e.message); }
 }
 
+/** Змінює суму вже доданої оплати за ключем (редагування повідомлення в чаті). @return {changed, old} */
+function bot_updatePaymentSum_(key, sum) {
+  return bot_withLock(function () {
+    var sh = bot_sheet(BOT_SHEETS.payments), map = bot_headerMap(sh, bot_payColsAlias_(), ['recon', 'accum', 'cost', 'balance']);
+    if (!map.recon || sh.getLastRow() < 2) return { changed: false };
+    var keys = sh.getRange(2, map.recon, sh.getLastRow() - 1, 1).getValues();
+    for (var i = 0; i < keys.length; i++) {
+      if (String(keys[i][0]) !== key) continue;
+      var cell = sh.getRange(i + 2, map.sum), old = Number(cell.getValue()) || 0;
+      if (old === sum) return { changed: false, old: old };
+      cell.setValue(sum);
+      return { changed: true, old: old };
+    }
+    return { changed: false };
+  });
+}
+
+/**
+ * Повідомлення в чаті «Отправка отчет»: лише від ВЛАСНИКА і лише виду «+10 000» / «+15к» → оплата в «Оплатах» (ключ tg-<id повідомлення>).
+ * У цьому чаті бот нічого не пише; повідомлення — власнику в особисті, з пропозицією розподілу оплат на ТТН.
+ */
+function bot_handlePayMessage(msg, edited) {
+  var from = msg.from || {};
+  if (!bot_isOwner(from.id)) return;                                      // чужі «+5000» ігноруємо
+  var pt = bot_setting('PAY_THREAD_ID');
+  if (pt !== '' && pt !== '0' && bot_threadOf(msg) !== String(pt)) return;
+  var sum = bot_parsePayText(msg.text || msg.caption || '');
+  if (sum === null) return;
+  var date = bot_makeDateFrom_(new Date(msg.date * 1000)), op = bot_openingFromSettings();
+  if (op && !bot_afterCut_(date, op.ordersAfter)) return;                  // до вересня — вже в початковому залишку
+  var key = 'tg-' + msg.message_id;
+  var res = bot_addPaymentRow_(key, sum, date);
+  var head = '';
+  if (res.duplicate) {
+    if (!edited) return;                                                  // повтор того самого повідомлення
+    var u = bot_updatePaymentSum_(key, sum);
+    if (!u.changed) return;
+    head = '✏️ Оплату з чату виправлено: ' + bot_fmtMoney(u.old) + ' → <b>' + bot_fmtMoney(sum) + '</b>';
+  } else {
+    head = '💰 Оплату з чату «Отправка отчет» внесено: <b>' + bot_fmtMoney(sum) + '</b> від ' + bot_fmtDate(date) + (typeof res.balance === 'number' ? '\nБорг: <b>' + bot_fmtMoney(res.balance) + '</b>' : '');
+  }
+  bot_sendToOwners(head);
+  bot_ownerIds().forEach(function (id) { try { bot_cmdAllocate(id); } catch (e) { bot_log('УВАГА', 'розподіл після оплати з чату', e.message); } });
+}
+
 /** /addpay <сума> [дата] — одна оплата вручну. Дата за замовчуванням — сьогодні. */
 function bot_cmdAddPay(chatId, arg) {
   var m = String(arg || '').trim().match(/^(\S+)(?:\s+(\d{1,2}[.\-\/]\d{1,2}[.\-\/]\d{4}))?$/);
