@@ -384,3 +384,16 @@ test('Формули «Оплат» під «;»-мову: нові рядки �
   assert.equal(f(3, 7), "='Підсумки'!$A$5");
   assert.equal(f(3, 8), '=G3-F3');
 });
+
+test('C: AfterpaymentOnGoodsCost = 0 не передаємо (НП: «is invalid»); непорожнє — передаємо; /npdoc показує службові значення', () => {
+  const env = fresh(); const c = env.ctx;
+  const d0 = npDoc(TEST); d0.AfterpaymentOnGoodsCost = '0';
+  assert.ok(!('AfterpaymentOnGoodsCost' in c.bot_npBuildPayload(d0, 'x').payload));
+  const d1 = npDoc(TEST); d1.AfterpaymentOnGoodsCost = '1509.1';
+  assert.equal(c.bot_npBuildPayload(d1, 'x').payload.AfterpaymentOnGoodsCost, '1509.1');
+  assert.deepEqual([...c.bot_npDiffDocs(d0, npDoc(TEST))], []);                 // «0» і «немає» — не зміна
+  env.docs[TEST] = d1; env.props.TG_TOKEN = '123:ABCDEFGHIJKLMNOPQRSTUVWXYZ'; c.bot_setSetting('OWNER_IDS', String(OWNER));
+  c.bot_cmdNpDoc(OWNER, TEST);
+  assert.match(env.lastSent().text, /AfterpaymentOnGoodsCost=1509\.1/);
+  assert.ok(!/380501112233/.test(env.lastSent().text));                         // телефони не показуємо
+});

@@ -40,7 +40,12 @@ var BOT_NP_UPDATE_FIELDS_ = [
   ['AfterpaymentOnGoodsCost', ['AfterpaymentOnGoodsCost'], false]
 ];
 
+/** Поля без персональних даних — їх значення /npdoc показує повністю (для діагностики). */
+var BOT_NP_SAFE_VIEW_ = ['PayerType', 'PaymentMethod', 'CargoType', 'ServiceType', 'SeatsAmount', 'Weight', 'Cost', 'AfterpaymentOnGoodsCost', 'BackwardDeliveryData', 'OptionsSeat', 'VolumeGeneral', 'SaturdayDelivery', 'PreferredDeliveryDate'];
+
 function bot_npHas_(v) { return v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && !v.length); }
+
+function bot_npIsZero_(v) { return typeof v !== 'object' && /^\s*0+([.,]0+)?\s*$/.test(String(v)); }
 
 function bot_npDateOnly_(s) {
   var m = String(s || '').match(/^\d{2}\.\d{2}\.\d{4}/);
@@ -56,6 +61,7 @@ function bot_npBuildPayload(doc, text) {
   BOT_NP_UPDATE_FIELDS_.forEach(function (f) {
     var val;
     for (var i = 0; i < f[1].length && !bot_npHas_(val); i++) val = doc[f[1][i]];
+    if (!f[2] && bot_npIsZero_(val)) return;                        // необов'язкове поле зі значенням 0 / «0.00» НП не приймає назад («is invalid») — не передаємо
     if (!bot_npHas_(val)) { if (f[2]) missing.push(f[0]); return; }
     payload[f[0]] = f[0] === 'DateTime' ? bot_npDateOnly_(val) : val;
   });
@@ -77,6 +83,7 @@ function bot_npDiffDocs(before, after) {
     var b, a;
     f[1].forEach(function (k) { if (b === undefined && before[k] !== undefined) b = before[k]; if (a === undefined && after[k] !== undefined) a = after[k]; });
     if (f[0] === 'DateTime') { b = bot_npDateOnly_(b); a = bot_npDateOnly_(a); }
+    if (!f[2]) { if (b === undefined || bot_npIsZero_(b) || !bot_npHas_(b)) b = ''; if (a === undefined || bot_npIsZero_(a) || !bot_npHas_(a)) a = ''; }   // «немає» = «0»
     if (bot_npNorm_(b) !== bot_npNorm_(a)) changed.push(f[0]);
   });
   return changed;
@@ -179,6 +186,7 @@ function bot_cmdNpDoc(chatId, arg) {
     var b = bot_npBuildPayload(doc, '');
     bot_send(chatId, '🔎 <b>ТТН ' + ttn + '</b> (лише читання)\nПоля, які НП повернула: ' + bot_esc(Object.keys(doc).join(', ')) +
       '\n\nДля запису потрібні: ' + (b.missing.length ? '❌ <b>бракує:</b> ' + bot_esc(b.missing.join(', ')) : '✅ усі обов\'язкові поля є') +
+      '\n\nЗначення службових полів (без персональних даних): ' + bot_esc(BOT_NP_SAFE_VIEW_.map(function (k) { var v = doc[k]; return k + '=' + (v === undefined ? '—' : (typeof v === 'object' ? JSON.stringify(v) : (v === '' ? '(порожньо)' : v))); }).join('; ')) +
       '\nПоточна «Додаткова інформація»: <i>' + bot_esc(doc.AdditionalInformation || '(порожньо)') + '</i>');
   } catch (e) { bot_send(chatId, '❌ ' + bot_esc(bot_scrub(e.message))); }
 }
