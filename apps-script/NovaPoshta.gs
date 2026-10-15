@@ -78,7 +78,10 @@ function bot_npPlanPatch(order, item, now) {
   var unknown = false;
   if (item.statusText && item.statusText !== order.npStatus) f.npStatus = item.statusText;
   if (item.created && (!order.ttnDate || order.ttnDate.getTime() !== item.created.getTime())) f.ttnDate = item.created;
-  if (!item.stage) {
+  if (item.notFound && (order.stage === 'В дорозі' || order.stage === 'На відділенні')) {
+    // «не знайдено» для посилки, яка вже їхала, — збій/обмеження API НП, а не реальність: етап не чіпаємо
+    unknown = false;
+  } else if (!item.stage) {
     unknown = true;                                           // етап не змінюємо
   } else {
     if (item.stage !== order.stage) f.stage = item.stage;

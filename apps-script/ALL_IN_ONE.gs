@@ -1806,8 +1806,9 @@ function bot_reconcileCompute(fileRows, orders, opts) {
     d.rowsCount = rows.length;
     d.tableSum = bot_sumBy_(rows, function (r) { return Number(r.cost) || 0; });
     d.orders = rows.map(function (r) { return { no: r.no, print: r.print, type: r.type, cost: Number(r.cost) || 0, row: r._row }; });
-    // «значущі» рядки: скасований/нульовий рядок (cost 0, статус не «В роботі») не робить ТТН «частково оплаченою»
-    var relevant = rows.filter(function (r) { return r.status === 'В роботі' || (Number(r.cost) || 0) > 0; });
+    // «значущі» рядки: рядок із нульовою собівартістю (скасований, стікерпак 0 грн) нічого не винен
+    // і не робить ТТН «частково оплаченою»
+    var relevant = rows.filter(function (r) { return (Number(r.cost) || 0) > 0; });
     if (!relevant.length) relevant = rows;
     var paid = relevant.filter(function (r) { return r.paid === 'Оплачено'; });
     var firstPaid = paid[0];
@@ -2165,7 +2166,7 @@ function bot_computeDebt(orders, payments) {
     if (o.stage !== 'Отримано' && o.stage !== 'Відмова') return;
     (groups[o.ttn] = groups[o.ttn] || []).push(o);
   });
-  var keys = Object.keys(groups);
+  var keys = Object.keys(groups).filter(function (k) { return bot_sumBy_(groups[k], function (o) { return Number(o.cost) || 0; }) > 0; });   // ТТН лише з нульових рядків боргу не має
   return {
     cost: cost, paid: paid, debt: bot_round2(cost - paid),
     unpaidDelivered: { count: keys.length, sum: bot_sumBy_(keys, function (k) { return bot_sumBy_(groups[k], function (o) { return Number(o.cost) || 0; }); }) }
@@ -2898,7 +2899,10 @@ function bot_npPlanPatch(order, item, now) {
   var unknown = false;
   if (item.statusText && item.statusText !== order.npStatus) f.npStatus = item.statusText;
   if (item.created && (!order.ttnDate || order.ttnDate.getTime() !== item.created.getTime())) f.ttnDate = item.created;
-  if (!item.stage) {
+  if (item.notFound && (order.stage === 'В дорозі' || order.stage === 'На відділенні')) {
+    // «не знайдено» для посилки, яка вже їхала, — збій/обмеження API НП, а не реальність: етап не чіпаємо
+    unknown = false;
+  } else if (!item.stage) {
     unknown = true;                                           // етап не змінюємо
   } else {
     if (item.stage !== order.stage) f.stage = item.stage;
@@ -3883,6 +3887,7 @@ function bot_readOldWorkbook(url) {
     var ph = pv[0];
     var pi = { no: bot_oldFind_(ph, ['№ оплати']), date: bot_oldFind_(ph, ['Дата оплати']), sum: bot_oldFind_(ph, ['Сума оплати']),
       bank: bot_oldFind_(ph, ['Спосіб / банк']), receipt: bot_oldFind_(ph, ['№ квитанції']) };
+    if (pi.date < 0 || pi.sum < 0) throw new Error('У старій таблиці (аркуш «Оплати») не знайшов колонку «' + (pi.sum < 0 ? 'Сума оплати' : 'Дата оплати') + '». Оплати не імпортовано — нічого не записано.');
     for (var j = 1; j < pv.length; j++) {
       var sum = bot_toNumber(pv[j][pi.sum]);
       if (sum === null) continue;

@@ -809,3 +809,60 @@ test('A42. Стікерпак наскрізно: у вже працюючій �
   assert.equal(o[0].type, 'Стікерпак'); assert.equal(o[0].cost, 0); assert.equal(o[0].size, '');
   assert.ok(!/⚠️|не вказано/.test(env.tg.sent.map(s => s.text || '').join('\n')), 'жодних зауважень про розмір/колір');
 });
+
+test('A43. НП: тимчасове «не знайдено» (код 3) не збиває етап посилки, що вже в дорозі/на відділенні; для «Не передана» — позначає «Немає ТТН»', () => {
+  const now = new Date('2026-10-14T10:00:00Z');
+  const item = B.bot_npParseItem({ Number: '20451550000001', StatusCode: '3', Status: 'Номер не знайдено' });
+  const base = { npStatus: '', ttnDate: null, handoff: null, arrived: null };
+  const keep = st => plain(B.bot_npPlanPatch(Object.assign({ stage: st }, base), item, now).fields);
+  assert.equal(keep('В дорозі').stage, undefined);
+  assert.equal(keep('На відділенні').stage, undefined);
+  assert.equal(keep('Не передана').stage, 'Немає ТТН');
+  assert.equal(keep('В дорозі').npStatus, 'Номер не знайдено', 'статус для людини оновлюється');
+  // справжні переходи не зачеплені
+  const ok = B.bot_npParseItem({ Number: '20451550000001', StatusCode: '7', Status: 'Прибув' });
+  assert.equal(plain(B.bot_npPlanPatch(Object.assign({ stage: 'В дорозі' }, base), ok, now).fields).stage, 'На відділенні');
+});
+
+test('A44. Імпорт зі старої таблиці: перейменована колонка оплат — гучна помилка, а не мовчазний пропуск усіх оплат', () => {
+  const bad = (url) => {
+    const wb = oldWorkbook(url);
+    const sh = wb.getSheetByName('Оплати'), vals = sh.getDataRange().getValues().map(r => r.slice());
+    vals[0] = vals[0].map(h => h === 'Сума оплати' ? 'Сума (грн)' : h);
+    return { getSheetByName: n => n === 'Оплати' ? { getDataRange: () => ({ getValues: () => vals }) } : wb.getSheetByName(n), getSheets: wb.getSheets };
+  };
+  const env = fresh({ oldWorkbook: bad });
+  assert.throws(() => env.ctx.bot_importFromUrl('https://docs.google.com/spreadsheets/d/old'), /Сума оплати/);
+  assert.equal(O(env).length, 0, 'нічого не записано');
+  assert.equal(env.rows('Оплати').filter(r => r[0] !== '').length, 0);
+});
+
+test('A45. Фазз: випадковий/сміттєвий текст не валить розбір (жодних винятків, ТТН завжди 14 цифр або порожньо)', () => {
+  const rnd = prng(20261015);
+  const bits = ['1538. Принт', 'Футболка', 'Худі', 'фліс', 'Стікерпак', 'чорна', 'XL', 'М', '20451553931463', '2045155393146', '000', '\n', '\n\n', ' ', '❗️ТЕРМІНОВО', '++++++', 'ДВА', '<b>', '&', '"', '​', '12.5', '-', 'ТТН:', '№', '99999999999999999999999', 'принт позаду', 'спереду', '1.', '2)', '\t'];
+  for (let n = 0; n < 3000; n++) {
+    let t = ''; const len = 1 + Math.floor(rnd() * 14);
+    for (let i = 0; i < len; i++) t += bits[Math.floor(rnd() * bits.length)] + (rnd() < 0.5 ? '\n' : ' ');
+    let res;
+    assert.doesNotThrow(() => { res = B.bot_parseOrderMessage(t); }, JSON.stringify(t));
+    res.forEach(o => { assert.ok(o.ttn === '' || /^\d{14}$/.test(o.ttn), JSON.stringify(t) + ' → ' + o.ttn); assert.ok(Number.isFinite(o.no)); });
+    assert.doesNotThrow(() => B.bot_parseOrderCaption(t));
+    assert.doesNotThrow(() => B.bot_mapOldOrderRow({ no: t, print: t, color: t, size: t, placement: t, ttn: t, cost: t, npStatus: t, paid: t }));
+    assert.doesNotThrow(() => B.bot_normTtn(t)); assert.doesNotThrow(() => B.bot_normSize(t)); assert.doesNotThrow(() => B.bot_parseTypeColor(t));
+  }
+});
+
+test('A46. Нульові рядки (стікерпак, 0 грн) не створюють «частково оплачені» ТТН і не роздувують «отримані, але не оплачені»', () => {
+  const D = (y, m, d) => B.bot_makeDate(y, m, d);
+  const row = (o) => Object.assign({ no: 1, print: 'P', type: 'Футболка', color: 'Чорний', size: 'L', ttn: '20451550000001', cost: 420, status: 'В роботі', paid: 'Не оплачено', stage: 'Отримано', recon: '', paidDate: '', note: '' }, o);
+  // футболка оплачена, стікерпак (0 грн) доданий до тієї ж ТТН пізніше
+  const orders = [row({ _row: 2, paid: 'Оплачено', recon: 'З-1', paidDate: D(2026, 10, 1) }), row({ _row: 3, no: 2, type: 'Стікерпак', cost: 0 })];
+  const d = plain(B.bot_reconcileCompute([{ ttn: '20451550000001', price: 420 }], orders, { priceRows: [], today: D(2026, 10, 14) }))[0];
+  assert.equal(d.category, 'PAID', 'нульовий неоплачений рядок не робить ТТН частково оплаченою');
+  // ТТН лише зі стікерпаком: боргу немає й у лічильник «неоплачених отриманих» вона не потрапляє
+  const only = [row({ _row: 4, no: 3, ttn: '20451550000002', type: 'Стікерпак', cost: 0 })];
+  const debt = plain(B.bot_computeDebt(only, []));
+  assert.equal(debt.unpaidDelivered.count, 0); assert.equal(debt.unpaidDelivered.sum, 0);
+  // звичайна неоплачена ТТН, як і раніше, рахується
+  assert.equal(plain(B.bot_computeDebt([row({ _row: 5, ttn: '20451550000003' })], [])).unpaidDelivered.count, 1);
+});

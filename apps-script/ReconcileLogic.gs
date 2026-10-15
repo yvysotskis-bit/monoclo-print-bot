@@ -50,8 +50,9 @@ function bot_reconcileCompute(fileRows, orders, opts) {
     d.rowsCount = rows.length;
     d.tableSum = bot_sumBy_(rows, function (r) { return Number(r.cost) || 0; });
     d.orders = rows.map(function (r) { return { no: r.no, print: r.print, type: r.type, cost: Number(r.cost) || 0, row: r._row }; });
-    // «значущі» рядки: скасований/нульовий рядок (cost 0, статус не «В роботі») не робить ТТН «частково оплаченою»
-    var relevant = rows.filter(function (r) { return r.status === 'В роботі' || (Number(r.cost) || 0) > 0; });
+    // «значущі» рядки: рядок із нульовою собівартістю (скасований, стікерпак 0 грн) нічого не винен
+    // і не робить ТТН «частково оплаченою»
+    var relevant = rows.filter(function (r) { return (Number(r.cost) || 0) > 0; });
     if (!relevant.length) relevant = rows;
     var paid = relevant.filter(function (r) { return r.paid === 'Оплачено'; });
     var firstPaid = paid[0];
@@ -409,7 +410,7 @@ function bot_computeDebt(orders, payments) {
     if (o.stage !== 'Отримано' && o.stage !== 'Відмова') return;
     (groups[o.ttn] = groups[o.ttn] || []).push(o);
   });
-  var keys = Object.keys(groups);
+  var keys = Object.keys(groups).filter(function (k) { return bot_sumBy_(groups[k], function (o) { return Number(o.cost) || 0; }) > 0; });   // ТТН лише з нульових рядків боргу не має
   return {
     cost: cost, paid: paid, debt: bot_round2(cost - paid),
     unpaidDelivered: { count: keys.length, sum: bot_sumBy_(keys, function (k) { return bot_sumBy_(groups[k], function (o) { return Number(o.cost) || 0; }); }) }

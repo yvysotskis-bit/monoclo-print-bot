@@ -44,6 +44,7 @@ function bot_readOldWorkbook(url) {
     var ph = pv[0];
     var pi = { no: bot_oldFind_(ph, ['№ оплати']), date: bot_oldFind_(ph, ['Дата оплати']), sum: bot_oldFind_(ph, ['Сума оплати']),
       bank: bot_oldFind_(ph, ['Спосіб / банк']), receipt: bot_oldFind_(ph, ['№ квитанції']) };
+    if (pi.date < 0 || pi.sum < 0) throw new Error('У старій таблиці (аркуш «Оплати») не знайшов колонку «' + (pi.sum < 0 ? 'Сума оплати' : 'Дата оплати') + '». Оплати не імпортовано — нічого не записано.');
     for (var j = 1; j < pv.length; j++) {
       var sum = bot_toNumber(pv[j][pi.sum]);
       if (sum === null) continue;
