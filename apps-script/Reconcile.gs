@@ -518,7 +518,7 @@ function bot_payConfirm_(rec0, ctx) {
 
 // ---------- запис в «Оплати» (6.4) ----------
 
-function bot_addPaymentRow_(reconId, sum) {
+function bot_addPaymentRow_(reconId, sum, dateOpt) {
   return bot_withLock(function () {
     var sh = bot_sheet(BOT_SHEETS.payments);
     var map = bot_headerMap(sh, bot_payColsAlias_(), ['recon', 'accum', 'cost', 'balance']);
@@ -536,7 +536,7 @@ function bot_addPaymentRow_(reconId, sum) {
     var width = sh.getLastColumn();
     if (row > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 50);
     var arr = []; for (var k = 0; k < width; k++) arr.push('');
-    arr[map.no - 1] = lastNo + 1; arr[map.date - 1] = bot_today(); arr[map.sum - 1] = sum; arr[map.recon - 1] = reconId;
+    arr[map.no - 1] = lastNo + 1; arr[map.date - 1] = dateOpt || bot_today(); arr[map.sum - 1] = sum; arr[map.recon - 1] = reconId;
     sh.getRange(row, 1, 1, width).setValues([arr]);
     sh.getRange(row, map.date).setNumberFormat('dd.mm.yyyy');
     if (map.accum) sh.getRange(row, map.accum).setFormula('=SUM($' + bot_colLetter(map.sum) + '$2:' + bot_colLetter(map.sum) + row + ')');

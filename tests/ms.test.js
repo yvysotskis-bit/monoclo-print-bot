@@ -325,3 +325,30 @@ test('«Виварене»: виправлення вже доданих ряд�
   const again = c.bot_planWashedFix(messages, c.bot_readOrders(), c.bot_readPriceRows());
   assert.equal(again.changes.length, 0); assert.equal(again.unchanged, 2);
 });
+
+test('Оплати з чату «Отправка отчет»: розбір сум, пропуск до 08.09, ідемпотентність, борг падає', () => {
+  const env = fresh(); const c = env.ctx;
+  const P = c.bot_parsePayText;
+  assert.equal(P('+15к'), 15000); assert.equal(P('+ 21 401'), 21401); assert.equal(P('+14300'), 14300); assert.equal(P('+10 000'), 10000);
+  assert.equal(P('+14,5к'), 14500); assert.equal(P('+25.000'), 25000); assert.equal(P('Пораховано+'), null); assert.equal(P('+ потім'), null);
+  const d = (y, m, dd) => new Date(Date.UTC(y, m - 1, dd, 12));
+  const msgs = [
+    { id: 1, text: '+15к', date: d(2026, 8, 25) }, { id: 2, text: '+20к', date: d(2026, 9, 8) }, { id: 3, text: 'Пораховано+', date: d(2026, 9, 9) },
+    { id: 4, text: '+ 21 401', date: d(2026, 9, 12) }, { id: 5, text: '+14300', date: d(2026, 9, 23) }, { id: 6, text: '+25000', date: d(2026, 9, 30) },
+    { id: 7, text: '+9000', date: d(2026, 9, 30) }, { id: 8, text: '+10 000', date: d(2026, 10, 12) }, { id: 9, text: '+ щось', date: d(2026, 10, 13) }];
+  c.bot_setSetting('OPENING_DEBT', '2227020'); c.bot_setSetting('OPENING_ORDERS_AFTER', '31.08.2026'); c.bot_setSetting('OPENING_PAYS_AFTER', '08.09.2026');
+  const op = c.bot_openingFromSettings();
+  const plan = c.bot_planPayImport(msgs, { after: op.paysAfter, existingIds: [] });
+  assert.equal(plan.rows.length, 5); assert.equal(plan.total, 21401 + 14300 + 25000 + 9000 + 10000); assert.equal(plan.skippedOld, 2); assert.equal(plan.unclear.length, 1);
+  assert.equal(c.bot_payImportApply(plan), 5);
+  const plan2 = c.bot_planPayImport(msgs, { after: op.paysAfter, existingIds: c.bot_existingPayKeys_() });
+  assert.equal(plan2.rows.length, 0); assert.equal(plan2.skippedExisting, 5);
+  assert.equal(c.bot_payImportApply(plan), 0);                                    // повтор — без дублів
+  const pays = c.bot_readPayments();
+  assert.equal(pays.length, 5);
+  assert.equal(c.bot_computeDebt([], pays, op).debt, 2227020 - 79701);
+  env.props.TG_TOKEN = '123:ABCDEFGHIJKLMNOPQRSTUVWXYZ'; c.bot_setSetting('OWNER_IDS', String(OWNER));
+  c.bot_cmdAddPay(OWNER, '5к 14.10.2026');
+  assert.equal(c.bot_readPayments().length, 6);
+  assert.match(env.lastSent().text, /5\s?000/);
+});

@@ -18,6 +18,7 @@ var BOT_COMMANDS_ = [
   { command: 'setdesc', description: 'Свій опис: /setdesc ТТН текст' },
   { command: 'registry', description: 'Реєстр зараз / preview' },
   { command: 'backfill', description: 'Описи для замовлень з таблиці' },
+  { command: 'addpay', description: 'Додати оплату: /addpay сума дата' },
   { command: 'live', description: 'Бойовий режим запису в НП' },
   { command: 'preview', description: 'Режим перевірки (нічого в НП)' }
 ];
@@ -31,6 +32,7 @@ function onOpen() {
     .addItem('Імпорт з попередньої версії', 'bot_menuImport')
     .addItem('Імпорт замовлень з експорту Telegram', 'bot_menuTgImport')
     .addItem('«Виварене»: виправити тип і собівартість', 'bot_menuWashedFix')
+    .addItem('Імпорт оплат з експорту Telegram («Отправка отчет»)', 'bot_menuPayImport')
     .addSeparator()
     .addItem('Режим запису в НП: показати / бойовий / перевірка', 'bot_menuMode')
     .addSeparator()
