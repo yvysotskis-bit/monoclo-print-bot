@@ -102,7 +102,7 @@ function bot_npCall_(modelName, calledMethod, props) {
   });
   var body;
   try { body = JSON.parse(resp.getContentText()); } catch (e) { throw new Error('НП відповіла не JSON (HTTP ' + resp.getResponseCode() + ')'); }
-  if (!body.success) throw new Error('НП: ' + ((body.errors || []).join('; ') || 'невідома помилка'));
+  if (!body.success) { var err = new Error('НП: ' + ((body.errors || []).join('; ') || 'невідома помилка')); err.npLogical = true; throw err; }
   return body.data || [];
 }
 

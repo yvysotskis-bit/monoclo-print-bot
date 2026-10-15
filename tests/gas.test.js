@@ -55,7 +55,7 @@ test('Приймання: повідомлення 1538 → рядок за ≤1
   assert.equal(r.status, 'В роботі'); assert.equal(r.paid, 'Не оплачено'); assert.equal(r.msgId, String(m.message.message_id));
   assert.equal(env.ctx.bot_dayKey(r.date), '2026-10-07');
   // ТТН записана текстом
-  const raw = env.sheet('Замовлення').getRange(2, 9).getValue();
+  const raw = env.sheet('Замовлення').getRange(2, 10).getValue();
   assert.equal(typeof raw, 'string');
   assert.equal(env.tg.reactions.length, 1);
   assert.equal(env.tg.reactions[0].reaction[0].emoji, '👌');
@@ -600,7 +600,7 @@ test('Увімкнення бота і «Перевірити, що все пр�
   const methods = env.tg.calls.map(c => c.method);
   assert.ok(methods.includes('deleteWebhook') && methods.includes('setMyCommands'));
   assert.deepEqual(env.tg.calls.find(c => c.method === 'getUpdates'), undefined);
-  assert.equal(env.tg.calls.find(c => c.method === 'setMyCommands').payload.commands.length, 11);
+  assert.equal(env.tg.calls.find(c => c.method === 'setMyCommands').payload.commands.length, 16);
   const checks = env.ctx.bot_healthChecks();
   assert.ok(checks.length >= 8 && checks.every(c => /^(🟢|🔴) /.test(c)));
   assert.ok(checks.some(c => /Токен Telegram введено/.test(c) && c.startsWith('🟢')));

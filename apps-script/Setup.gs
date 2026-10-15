@@ -10,7 +10,7 @@ function bot_setupAll() {
   try { ss.setSpreadsheetTimeZone(BOT_TZ); } catch (e) { bot_log('УВАГА', 'часовий пояс', e.message); }
   try { ss.setSpreadsheetLocale('uk_UA'); } catch (e) { bot_log('УВАГА', 'мова таблиці', e.message); }
 
-  var order = [BOT_SHEETS.summary, BOT_SHEETS.orders, BOT_SHEETS.payments, BOT_SHEETS.price, BOT_SHEETS.lists,
+  var order = [BOT_SHEETS.summary, BOT_SHEETS.orders, BOT_SHEETS.ttn, BOT_SHEETS.registries, BOT_SHEETS.payments, BOT_SHEETS.price, BOT_SHEETS.lists,
     BOT_SHEETS.recon, BOT_SHEETS.reconDetails, BOT_SHEETS.monthly, BOT_SHEETS.settings, BOT_SHEETS.log];
   var firstRun = !ss.getSheetByName(BOT_SHEETS.orders);
   order.forEach(function (name, i) {
@@ -29,6 +29,7 @@ function bot_setupAll() {
   bot_setupPrice_();
   bot_setupOrders_();
   bot_setupPayments_();
+  bot_setupTtn_();
   bot_setupTable_(BOT_SHEETS.recon, BOT_RECON_COLS.map(function (c) { return c[1]; }), 16);
   bot_setupTable_(BOT_SHEETS.reconDetails, BOT_DETAIL_COLS.map(function (c) { return c[1]; }), 10);
   bot_setupTable_(BOT_SHEETS.monthly, BOT_MONTHLY_COLS, 13);
@@ -214,4 +215,26 @@ function bot_setupPayments_() {
   sh.getRange(2, map.date, n, 1).setNumberFormat('dd.mm.yyyy');
   [map.sum, map.accum, map.cost, map.balance].forEach(function (c) { sh.getRange(2, c, n, 1).setNumberFormat('#,##0" грн"'); });
   sh.setColumnWidths(1, sh.getLastColumn(), 140);
+}
+
+// ---------- «ТТН» і «Реєстри» ----------
+
+function bot_setupTtn_() {
+  var sh = bot_sheet(BOT_SHEETS.ttn);
+  bot_ensureHeaders_(sh, BOT_TTN_COLS.map(function (c) { return c[1]; }));
+  bot_styleHeader_(sh, sh.getLastColumn());
+  var map = bot_ttnMap(sh), n = Math.max(sh.getMaxRows() - 1, 1);
+  ['ttn', 'orders', 'original', 'desc', 'registry', 'msgId', 'npRef', 'note', 'status'].forEach(function (k) { if (map[k]) sh.getRange(2, map[k], n, 1).setNumberFormat('@'); });
+  if (map.written) sh.getRange(2, map.written, n, 1).setNumberFormat('dd.mm.yyyy hh:mm');
+  if (map.len) sh.getRange(2, map.len, n, 1).setNumberFormat('0');
+  if (map.status) sh.getRange(2, map.status, n, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(BOT_TTN_STATUSES, true).setAllowInvalid(true).build());
+  [map.msgId, map.npRef].forEach(function (c) { if (c) sh.hideColumns(c); });
+  var widths = { ttn: 140, orders: 150, original: 320, desc: 360, len: 80, status: 120, written: 130, registry: 90, note: 260 };
+  Object.keys(widths).forEach(function (k) { if (map[k]) sh.setColumnWidth(map[k], widths[k]); });
+  sh.setFrozenRows(1);
+
+  var rg = bot_sheet(BOT_SHEETS.registries);
+  bot_ensureHeaders_(rg, BOT_REG_COLS.map(function (c) { return c[1]; }));
+  bot_styleHeader_(rg, rg.getLastColumn());
+  rg.setFrozenRows(1);
 }

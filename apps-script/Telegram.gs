@@ -275,7 +275,7 @@ function bot_onMessage(msg, edited) {
     if (cmd0 && cmd0.cmd === 'start' && !bot_ownerIds().length) {
       bot_setSetting('OWNER_IDS', String(from.id));
       bot_log('ІНФО', 'owner', 'Власник: ' + from.id + ' ' + (from.username || ''));
-      bot_send(chat.id, '👋 Вітаю! Ви — власник бота. Далі:\n1) додайте бота в групу виробництва;\n2) у гілці «Замовлення на клієнта» напишіть <code>/bind orders</code>;\n3) у гілці «Реєстри» — <code>/bind report</code>.\n\n' + bot_helpText());
+      bot_send(chat.id, '👋 Вітаю! Ви — власник бота. Далі:\n1) додайте бота в групу виробництва;\n2) у гілці «Замовлення на клієнта» напишіть <code>/bind orders</code>;\n3) у гілці «Реєстри» — <code>/bind registry</code>.\n\n' + bot_helpText());
       return;
     }
     if (!bot_isOwner(from.id)) { bot_log('УВАГА', 'чужий користувач', 'private ' + from.id + ' ' + (from.username || '')); return; }
@@ -337,6 +337,11 @@ function bot_helpText() {
     '• /price — чинні ціни; /price Худі фліс 780 15.11.2026 — нова ціна\n' +
     '• /report — ранковий звіт зараз (тільки вам)\n' +
     '• /month — місячний звіт (/month 2026-08 — за вказаний місяць)\n' +
+    '• /desc &lt;ТТН&gt; — опис ТТН і його статус\n' +
+    '• /setdesc &lt;ТТН&gt; &lt;текст&gt; — свій текст опису (до 100 символів; «-» — повернути автоматичний)\n' +
+    '• /registry — реєстр зараз; /registry preview — що ввійде\n' +
+    '• /nptest &lt;ТТН&gt; &lt;текст&gt; — перевірка запису на ТЕСТОВІЙ ТТН; /npdoc &lt;ТТН&gt; — що віддає НП\n' +
+    '• /live — бойовий режим (запис у НП); /preview — режим перевірки\n' +
     '• /help — ця довідка';
 }
 
@@ -354,6 +359,13 @@ function bot_onCommand(msg, c) {
     case 'price': return bot_cmdPrice(chatId, c.arg);
     case 'report': return bot_cmdReport(chatId);
     case 'month': return bot_cmdMonth(chatId, c.arg);
+    case 'desc': return bot_cmdDesc(chatId, c.arg);
+    case 'setdesc': return bot_cmdSetDesc(chatId, c.arg);
+    case 'registry': return bot_cmdRegistry(chatId, c.arg);
+    case 'live': return bot_cmdLive(chatId);
+    case 'preview': return bot_cmdPreviewMode(chatId);
+    case 'npdoc': return bot_cmdNpDoc(chatId, c.arg);
+    case 'nptest': return bot_cmdNpTest(chatId, c.arg);
     default: return bot_send(chatId, 'Не знаю такої команди. /help — що я вмію.');
   }
 }
@@ -363,8 +375,9 @@ function bot_cmdBind(msg, arg) {
   var what = String(arg || '').trim().toLowerCase();
   var chatId = msg.chat.id, thread = bot_threadOf(msg);
   var opts = thread !== '0' ? { thread: thread } : {};
+  if (what === 'registry') what = 'report';
   if (what !== 'orders' && what !== 'report') {
-    var r0 = bot_send(chatId, 'Напишіть <code>/bind orders</code> (гілка замовлень) або <code>/bind report</code> (гілка звіту).', opts);
+    var r0 = bot_send(chatId, 'Напишіть <code>/bind orders</code> (гілка «Замовлення на клієнта») або <code>/bind registry</code> (гілка «Реєстри»).', opts);
     if (r0.ok) bot_scheduleDelete(chatId, r0.result.message_id, 15);
     return;
   }
@@ -373,7 +386,7 @@ function bot_cmdBind(msg, arg) {
     bot_setSetting(what === 'orders' ? 'ORDERS_THREAD_ID' : 'REPORT_THREAD_ID', thread);
   });
   bot_log('ІНФО', 'bind ' + what, 'chat ' + chatId + ' thread ' + thread);
-  var r = bot_send(chatId, '✅ Готово: ' + (what === 'orders' ? 'тут беру замовлення' : 'сюди надсилатиму ранковий звіт') + '.', opts);
+  var r = bot_send(chatId, '✅ Готово: ' + (what === 'orders' ? 'тут беру замовлення' : 'сюди надсилатиму реєстри й ранковий звіт') + '.', opts);
   if (r.ok) bot_scheduleDelete(chatId, r.result.message_id, 10);
 }
 
@@ -403,6 +416,10 @@ function bot_onCallback(cb) {
       case 'pay': case 'payy': case 'payn': case 'det': case 'cnc': case 'dsp': case 'rs': case 'rsy': case 'rsn':
       case 'sup': case 'opy': case 'opc': case 'opn': case 'undy': case 'undn':
         return bot_reconCallback(parts, ctx);
+      case 'regy': case 'regn':
+        return bot_registryCallback(parts, ctx);
+      case 'nptq': case 'nptn':
+        return bot_npTestCallback(parts, ctx);
       case 'prcy': case 'prcn':
         return bot_priceCallback(parts, ctx);
       default:

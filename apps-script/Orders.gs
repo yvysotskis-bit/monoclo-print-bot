@@ -38,14 +38,14 @@ function bot_buildOrderFields_(p, orderDate, priceRows, status) {
   else if (p.type) {
     var price = bot_priceFor(priceRows, p.type, orderDate, new Date());
     if (price === null) { issues.push('«' + p.type + '» немає в прайсі'); yellow.push('cost'); }
-    else cost = price;
+    else cost = price * (p.qty || 1);
   } else {
     yellow.push('cost');
   }
   return {
     fields: {
       no: p.no, date: orderDate, print: p.print, type: p.type, color: p.color, size: p.size, placement: p.placement,
-      prints: p.prints, ttn: p.ttn, cost: cost
+      prints: p.prints, qty: p.qty || 1, ttn: p.ttn, cost: cost
     },
     issues: issues, yellow: yellow
   };
@@ -136,6 +136,9 @@ function bot_handleOrderMessage(msg, caption, edited) {
       if (react !== '✍') react = b.issues.length ? '✍' : '👌';
       if (b.issues.length) bot_sendToOwners('✍️ Замовлення №' + p.no + ' додано, але: ' + bot_esc(b.issues.join(', ')) + '. Клітинки в таблиці підсвічені жовтим.' + linkTxt);
     });
+
+    try { bot_ttnSync(msg, caption, list, edited); }                // аркуш «ТТН»: оригінал + скорочений опис
+    catch (e) { bot_log('ПОМИЛКА', 'ТТН-опис', e.message); bot_sendToOwners('⚠️ Не вдалося зберегти опис ТТН: ' + bot_esc(bot_scrub(e.message))); }
 
     if (react) bot_react(chat.id, msg.message_id, react);
   });

@@ -98,7 +98,7 @@ function newEnv(opts) {
   const respond = (obj) => ({ getResponseCode: () => 200, getContentText: () => JSON.stringify(obj) });
   const UrlFetchApp = {
     fetch(url, o) {
-      const payload = o && o.payload ? JSON.parse(o.payload) : {};
+      const payload = o && o.payload ? (typeof o.payload === 'string' ? JSON.parse(o.payload) : o.payload) : {};
       if (/telegram\.org\/file\//.test(url)) return { getResponseCode: () => 200, getBlob: () => mkBlob(state.nextFile) };
       if (state.netFail && state.netFail(url, o)) throw new Error(state.netFailMessage || ('Exception: Address unavailable: ' + url));
       let m = String(url).match(/api\.telegram\.org\/bot[^/]+\/(\w+)/);
@@ -111,6 +111,7 @@ function newEnv(opts) {
           case 'setMessageReaction': tg.reactions.push(payload); return respond({ ok: true, result: true });
           case 'answerCallbackQuery': tg.answers.push(payload); return respond({ ok: true, result: true });
           case 'deleteMessage': tg.deletes.push(payload); return respond({ ok: true, result: true });
+          case 'sendDocument': { const id = tg.nextId++; (tg.documents = tg.documents || []).push(Object.assign({ message_id: id }, payload)); return respond({ ok: true, result: { message_id: id, document: { file_id: 'FILEID' + id } } }); }
           case 'getFile': return respond({ ok: true, result: { file_path: 'docs/file' } });
           case 'getMe': return respond({ ok: true, result: { id: 1, username: 'monoclo_test_bot' } });
           case 'getWebhookInfo': return respond({ ok: true, result: { url: '' } });
@@ -118,6 +119,7 @@ function newEnv(opts) {
           default: return respond({ ok: true, result: true });
         }
       }
+      if (/my\.novaposhta\.ua\/orders\/printMarking100x100/.test(url)) { np.printUrls = (np.printUrls || []).concat(url); const pdf = { name: 'm.pdf', bytes: Buffer.from(np.printBad ? '<html>' : '%PDF-1.4 test') }; return { getResponseCode: () => 200, getBlob: () => mkBlob(pdf) }; }
       if (/novaposhta/.test(url)) { np.calls.push(payload); if (np.fail) return respond({ success: false, data: [], errors: [np.fail] }); return respond({ success: true, data: np.handler(payload), errors: [] }); }
       throw new Error('Невідомий URL у моці: ' + url);
     }
