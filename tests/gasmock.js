@@ -38,6 +38,7 @@ class Range {
     })); return this;
   }
   setValue(v) { return this.setValues([[v]]); }
+  setFormulas(a) { a.forEach((row, i) => row.forEach((f, j) => { const cell = this.sh.getRange(this.r + i, this.c + j); if (typeof f === 'string' && f.startsWith('=')) cell.setFormula(f); else cell.setValue(f); })); return this; }
   setFormula(f) {                                   // моделюємо мову таблиці: «;»-мови не розуміють «,» між аргументами
     const semi = this.sh.ss.semi, bare = String(f).replace(/"[^"]*"/g, '');
     if (semi && bare.includes(',')) return this.setValue('#ERROR!');

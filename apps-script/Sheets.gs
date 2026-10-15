@@ -367,6 +367,9 @@ function bot_formulaSep_(sheet) {
 
 /** Перетворює «англійську» формулу (з комами) під мову таблиці. Коми всередині "рядків" не чіпає. */
 function bot_fx(formula) {
+  if (!BOT_CACHE_.sep) {                                     // роздільник ще не визначали (напр. запис з імпорту) — визначаємо на службовому аркуші «Лог»
+    try { bot_formulaSep_(bot_ss().getSheetByName(BOT_SHEETS.log) || bot_ss().getSheets()[0]); } catch (e) { BOT_CACHE_.sep = ','; }
+  }
   if ((BOT_CACHE_.sep || ',') === ',') return formula;
   var out = '', inStr = false;
   for (var i = 0; i < formula.length; i++) {

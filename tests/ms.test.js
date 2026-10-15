@@ -369,3 +369,18 @@ test('Покриття собівартості місяця: 🟢 покрит�
   cur.redPct = 10;
   assert.match(c.bot_buildMonthReport(cur, null), /🔴 Покриття собівартості: Велика різниця/);
 });
+
+test('Формули «Оплат» під «;»-мову: нові рядки й переписування старих (без #ERROR!)', () => {
+  const env = newEnv({ semi: true }); env.setup();
+  const c = env.ctx; const sh = env.sheet('Оплати');
+  c.bot_addPaymentRow_('tg-1', 20000, c.bot_makeDate(2026, 9, 4));
+  c.bot_addPaymentRow_('tg-2', 21401, c.bot_makeDate(2026, 9, 12));
+  const f = (r, col) => sh.getRange(r, col).getValue();
+  [2, 3].forEach(r => { const acc = f(r, 6); assert.ok(acc.startsWith('=SUMIFS('), acc); assert.ok(!/,(?=(?:[^"]*"[^"]*")*[^"]*$)/.test(acc), 'без ком поза лапками: ' + acc); assert.ok(acc.includes(';')); });
+  sh.getRange(2, 6).setFormula("=SUMIFS($C$2:C2,$B$2:B2,\">\"&'Підсумки'!$H$6)");     // «зламана» формула з комами → #ERROR!
+  assert.equal(sh.getRange(2, 6).getValue(), '#ERROR!');
+  c.bot_rewritePaymentFormulas();
+  assert.ok(f(2, 6).includes(';') && !f(2, 6).includes('",'));
+  assert.equal(f(3, 7), "='Підсумки'!$A$5");
+  assert.equal(f(3, 8), '=G3-F3');
+});

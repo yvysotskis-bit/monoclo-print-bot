@@ -1160,6 +1160,9 @@ function bot_formulaSep_(sheet) {
 
 /** Перетворює «англійську» формулу (з комами) під мову таблиці. Коми всередині "рядків" не чіпає. */
 function bot_fx(formula) {
+  if (!BOT_CACHE_.sep) {                                     // роздільник ще не визначали (напр. запис з імпорту) — визначаємо на службовому аркуші «Лог»
+    try { bot_formulaSep_(bot_ss().getSheetByName(BOT_SHEETS.log) || bot_ss().getSheets()[0]); } catch (e) { BOT_CACHE_.sep = ','; }
+  }
   if ((BOT_CACHE_.sep || ',') === ',') return formula;
   var out = '', inStr = false;
   for (var i = 0; i < formula.length; i++) {
@@ -2996,6 +2999,36 @@ function bot_payConfirm_(rec0, ctx) {
 
 // ---------- запис в «Оплати» (6.4) ----------
 
+/** Формула «Накопичено оплат» для рядка row: лише оплати ПІСЛЯ дати початкового залишку (Підсумки!H6; 0 — усі). */
+function bot_accumFormula_(map, row) {
+  var s = bot_colLetter(map.sum), d = bot_colLetter(map.date);
+  return bot_fx('=SUMIFS($' + s + '$2:' + s + row + ',$' + d + '$2:' + d + row + ',">"&\'' + BOT_SHEETS.summary + '\'!$H$6)');
+}
+
+/** Виправляє формули «Накопичено / Собівартість / Залишок боргу» лише в тих рядках «Оплат», де вони дали помилку (#ERROR! від формул з іншим роздільником). */
+function bot_rewritePaymentFormulas() {
+  bot_withLock(function () {
+    var sh = bot_sheet(BOT_SHEETS.payments);
+    var map = bot_headerMap(sh, bot_payColsAlias_(), ['recon', 'accum', 'cost', 'balance']);
+    if (!map.accum || !map.cost || !map.balance) return;
+    var last = sh.getLastRow(); if (last < 2) return;
+    var width = sh.getLastColumn();
+    var vals = sh.getRange(2, 1, last - 1, width).getValues();
+    function isErr(v) { return typeof v === 'string' && v.charAt(0) === '#'; }
+    var fixed = 0;
+    vals.forEach(function (r, i) {
+      var row = i + 2;
+      if (r[map.sum - 1] === '' || r[map.sum - 1] === null) return;
+      if (!(isErr(r[map.accum - 1]) || isErr(r[map.cost - 1]) || isErr(r[map.balance - 1]))) return;
+      sh.getRange(row, map.accum).setFormula(bot_accumFormula_(map, row));
+      sh.getRange(row, map.cost).setFormula("='" + BOT_SHEETS.summary + "'!$A$5");
+      sh.getRange(row, map.balance).setFormula('=' + bot_colLetter(map.cost) + row + '-' + bot_colLetter(map.accum) + row);
+      fixed++;
+    });
+    if (fixed) bot_log('ІНФО', 'формули «Оплат»', 'виправлено рядків: ' + fixed);
+  });
+}
+
 function bot_addPaymentRow_(reconId, sum, dateOpt) {
   return bot_withLock(function () {
     var sh = bot_sheet(BOT_SHEETS.payments);
@@ -3018,7 +3051,7 @@ function bot_addPaymentRow_(reconId, sum, dateOpt) {
     sh.getRange(row, 1, 1, width).setValues([arr]);
     sh.getRange(row, map.date).setNumberFormat('dd.mm.yyyy');
     // накопичено — лише оплати ПІСЛЯ дати початкового залишку (раніші вже в ньому); без залишку «Підсумки»!H6 = 0 → усі
-    if (map.accum) sh.getRange(row, map.accum).setFormula(bot_fx('=SUMIFS($' + bot_colLetter(map.sum) + '$2:' + bot_colLetter(map.sum) + row + ',$' + bot_colLetter(map.date) + '$2:' + bot_colLetter(map.date) + row + ',">"&\'' + BOT_SHEETS.summary + '\'!$H$6)'));
+    if (map.accum) sh.getRange(row, map.accum).setFormula(bot_accumFormula_(map, row));
     if (map.cost) sh.getRange(row, map.cost).setFormula("='" + BOT_SHEETS.summary + "'!$A$5");
     if (map.balance && map.cost && map.accum) sh.getRange(row, map.balance).setFormula('=' + bot_colLetter(map.cost) + row + '-' + bot_colLetter(map.accum) + row);
     SpreadsheetApp.flush();
@@ -4803,6 +4836,7 @@ function bot_setupAll() {
   bot_sheet(BOT_SHEETS.log).getRange(2, 1, 2200, 1).setNumberFormat('dd.mm.yyyy hh:mm:ss');
 
   bot_buildSummary();
+  try { bot_rewritePaymentFormulas(); } catch (e) { bot_log('УВАГА', 'формули «Оплат»', e.message); }
   bot_ss().setActiveSheet(bot_sheet(BOT_SHEETS.orders));
   bot_log('ІНФО', 'Перше налаштування', firstRun ? 'таблицю створено' : 'оновлено');
 }

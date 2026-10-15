@@ -46,6 +46,7 @@ function bot_setupAll() {
   bot_sheet(BOT_SHEETS.log).getRange(2, 1, 2200, 1).setNumberFormat('dd.mm.yyyy hh:mm:ss');
 
   bot_buildSummary();
+  try { bot_rewritePaymentFormulas(); } catch (e) { bot_log('УВАГА', 'формули «Оплат»', e.message); }
   bot_ss().setActiveSheet(bot_sheet(BOT_SHEETS.orders));
   bot_log('ІНФО', 'Перше налаштування', firstRun ? 'таблицю створено' : 'оновлено');
 }
