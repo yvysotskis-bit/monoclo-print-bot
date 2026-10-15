@@ -754,9 +754,9 @@ test('Аудит: реєстр — збій позначки ТТН після �
 
 test('Аудит: розбір оплат — строгий (телефон, дата, сума > 10 млн, неоднозначні числа відхиляються; нормальні — ні)', () => {
   const P = fresh().ctx.bot_parsePayText;
-  const ok = { '+15к': 15000, '+ 21 401': 21401, '+14300': 14300, '+10 000': 10000, '+14,5к': 14500, '+1.5к': 1500, '+1 500,50': 1500.5, '+25.000': 25000, '+10к грн': 10000, '+1500.50': 1500.5, '+1,5': 1.5 };
+  const ok = { '+15к': 15000, '+ 21 401': 21401, '+14300': 14300, '+10 000': 10000, '+14,5к': 14500, '+1.5к': 1500, '+1 500,50': 1500.5, '+25.000': 25000, '+10к грн': 10000, '+1500.50': 1500.5, '+1,5': 1.5, '+1,234.56': 1234.56 };
   Object.keys(ok).forEach(k => assert.equal(P(k), ok[k], k));
-  ['+380501234567', '+380 50 123 45 67', '+1.234,56', '+1,234.56', '+1.5.5', '+1,5,5', '+10.09', '+15.09', '+0', '+0.004', '+', '+abc', '+10 000 000 000', 'Пораховано+', '+15к к'].forEach(k => assert.equal(P(k), null, k));
+  ['+380501234567', '+380 50 123 45 67', '+1.234,56', '+1.5.5', '+1,5,5', '+10.09', '+15.09', '+0', '+0.004', '+', '+abc', '+10 000 000 000', 'Пораховано+', '+15к к'].forEach(k => assert.equal(P(k), null, k));
 });
 
 test('Аудит: /addpay — повтор того самого оновлення не додає другу оплату (навіть якщо пропозиція розподілу впала)', () => {
@@ -845,4 +845,73 @@ test('Аудит: ТТН з пробілами в повідомленні — �
   assert.equal(ttnRows(env)[0].ttn, T1);
   assert.ok(c.bot_ttnThreadEvidence_(Object.assign({}, ttnRows(env)[0]), []));                 // навіть без рядків «Замовлення»
   assert.equal(ttnRows(env)[0].status, 'Записано в НП');
+});
+
+test('Аудит: повторне «Перше налаштування» не губить дані аркушів «ТТН», «Реєстри», «Оплати» і налаштувань MS, не змінює режим НП', () => {
+  const env = liveEnv(); const c = env.ctx;
+  env.update(groupMsg(MSG1)); env.update(groupMsg(MSG2)); env.poll();
+  env.setNow('2026-10-07T07:00:00Z'); env.poll();
+  c.bot_addPaymentRow_('p1', 1000, c.bot_makeDate(2026, 10, 7));
+  c.bot_setSetting('REGISTRY_USERS', '1, 2'); c.bot_setSetting('PAY_RED_PERCENT', '15');
+  const snap = () => JSON.stringify(['ТТН', 'Реєстри', 'Оплати', 'Налаштування', 'Замовлення'].map(n => JSON.parse(JSON.stringify(env.sheet(n).getDataRange().getValues()))));
+  const before = snap();
+  env.setup();
+  c.bot_setSetting('OPENING_DEBT', '');                                                                       // (gasmock.setup вимикає залишок для тестів Монокло)
+  const after = snap();
+  assert.equal(after.replace(/"OPENING_DEBT","[^"]*"/, ''), before.replace(/"OPENING_DEBT","[^"]*"/, ''));
+  assert.equal(c.bot_setting('NP_MODE'), 'бойовий'); assert.equal(c.bot_setting('REGISTRY_USERS'), '1, 2'); assert.equal(c.bot_setting('PAY_RED_PERCENT'), '15');
+});
+
+// ---------- аудит №3: регресії навколо спільної ТТН ----------
+const CAPN = (no, ttn, color) => `${no}. Принт A\nФутболка ${color || 'чорна'}\nL\nПринт позаду\n\n${ttn}`;
+
+test('Аудит №3 (S1): редагування ПЕРШОГО повідомлення зі спільною ТТН не вбиває ТТН, яку несе друге повідомлення', () => {
+  const env = fresh(); const c = env.ctx; c.bot_setSetting('NP_MODE', 'перевірка');
+  const u1 = env.update(groupMsg(CAPN(15101, T1))); env.update(groupMsg(CAPN(15102, T1, 'біла'))); env.poll();
+  assert.equal(ttnRows(env)[0].orders, '15101, 15102');
+  env.update(edit(msgIdOf(u1), CAPN(15101, T2))); env.poll();
+  const a = ttnRows(env).find(r => r.ttn === T1), b = ttnRows(env).find(r => r.ttn === T2);
+  assert.notEqual(a.status, 'Знято'); assert.equal(a.orders, '15102'); assert.ok(a.desc.includes('15102') && !a.desc.includes('15101'));
+  assert.ok(b && b.orders === '15101');
+});
+
+test('Аудит №3 (S2): ТТН зі статусом «Знято» оживає, коли її приносить нове повідомлення', () => {
+  const env = fresh(); const c = env.ctx; c.bot_setSetting('NP_MODE', 'перевірка');
+  const u1 = env.update(groupMsg(CAPN(15101, T1))); env.poll();
+  env.update(edit(msgIdOf(u1), CAPN(15101, T2))); env.poll();
+  assert.equal(ttnRows(env).find(r => r.ttn === T1).status, 'Знято');
+  env.update(groupMsg(CAPN(15102, T1, 'біла'))); env.poll();
+  const a = ttnRows(env).find(r => r.ttn === T1);
+  assert.ok(['Новий', 'Перевірка'].includes(a.status)); assert.equal(a.orders, '15102'); assert.ok(a.desc.includes('15102'));
+});
+
+test('Аудит №3 (S3/S4): редагування НЕ-власника спільної ТТН оновлює опис; перенос замовлення на іншу ТТН прибирає його зі старої', () => {
+  const env = fresh(); const c = env.ctx; c.bot_setSetting('NP_MODE', 'перевірка');
+  env.update(groupMsg(CAPN(15101, T1)));
+  const u2 = env.update(groupMsg(CAPN(15102, T1, 'біла'))); env.poll();
+  const before = ttnRows(env)[0].desc;
+  env.update(edit(msgIdOf(u2), CAPN(15102, T1, 'сіра'))); env.poll();
+  assert.notEqual(ttnRows(env)[0].desc, before);                                          // колір змінився в описі
+  env.update(edit(msgIdOf(u2), CAPN(15102, T2, 'сіра'))); env.poll();                       // 15102 тепер на іншій ТТН
+  const a = ttnRows(env).find(r => r.ttn === T1), b = ttnRows(env).find(r => r.ttn === T2);
+  assert.equal(a.orders, '15101'); assert.ok(!a.desc.includes('15102'));
+  assert.equal(b.orders, '15102');
+  // повтор того ж редагування нічого не міняє
+  const snap = JSON.stringify(ttnRows(env)); env.update(edit(msgIdOf(u2), CAPN(15102, T2, 'сіра'))); env.poll();
+  assert.equal(JSON.stringify(ttnRows(env)), snap);
+});
+
+test('Аудит №3: оплати «+10,000», «+1,500», «+10.000,00» розбираються; дата-подібні й сміття — ні; нерозпізнане «+цифра» не мовчить', () => {
+  const env = fresh(); const c = env.ctx;
+  const P = (t) => c.bot_parsePayText(t);
+  assert.equal(P('+10,000'), 10000); assert.equal(P('+1,500'), 1500); assert.equal(P('+10,000.00'), 10000);
+  assert.equal(P('+10.000,00'), null); assert.equal(P('+15.00'), 15); assert.equal(P('+99.99'), 99.99);
+  assert.equal(P('+10.09'), null); assert.equal(P('+1,5,5'), null); assert.equal(P('+380501234567'), null);
+  assert.equal(P('+7,5'), 7.5);
+  const PAY = -1009999999999;
+  const m = (text, id) => ({ message: { message_id: id, date: ts('2026-10-12T16:35:00Z'), chat: { id: PAY, type: 'supergroup', title: 'Отправка отчет' }, from: { id: OWNER }, text } });
+  c.bot_setSetting('PAY_CHAT_ID', String(PAY));
+  env.update(m('+17 600 готівка', 31)); env.poll();
+  assert.equal(c.bot_readPayments().length, 0);
+  assert.ok(env.sentTo(OWNER).some(s => /не розпізнав/.test(s.text)));
 });

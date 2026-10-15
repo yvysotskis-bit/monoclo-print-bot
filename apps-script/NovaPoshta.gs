@@ -107,7 +107,7 @@ function bot_npCall_(modelName, calledMethod, props) {
       if (attempt < 3) { if (typeof Utilities !== 'undefined' && Utilities.sleep) Utilities.sleep(2500 * (attempt + 1)); continue; }
       var tr = new Error('НП: забагато запитів — повторю пізніше'); tr.npTransient = true; throw tr;
     }
-    if (/internal|unavailable|temporar|timeout|time out|server error|try again|service/i.test(text) && !/invalid|cannot|not found|incorrect/i.test(text)) {
+    if (/internal|unavailable|temporar|timeout|time out|server error|try again|service\s+(error|down|is\s+(down|busy))/i.test(text) && !/invalid|cannot|not found|incorrect/i.test(text)) {
       var tr2 = new Error('НП: тимчасова помилка (' + text + ') — повторю пізніше'); tr2.npTransient = true; throw tr2;      // збій на боці НП — не відмова
     }
     if (/api\s*key/i.test(text)) { var ke = new Error('НП: ключ API недійсний або не має прав (' + text + ')'); ke.npTransient = true; ke.npKey = true; throw ke; }   // не позначаємо кожну ТТН помилкою

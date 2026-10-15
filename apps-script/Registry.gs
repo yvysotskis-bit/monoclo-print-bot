@@ -264,7 +264,8 @@ function bot_registryFromGroup(msg, from) {
     bot_sendToOwners('❌ Реєстр, запрошений з групи (' + bot_esc([from.first_name, from.username].filter(Boolean).join(' ')) + '), не створено: ' + bot_esc(bot_scrub(e.message)));
     return bot_send(chatId, 'Не вдалося створити реєстр — власника повідомлено.', opts);
   }
-  if (!/створено|надіслано|перевідправив/i.test(r.text || '')) bot_send(chatId, 'Немає нових ТТН для реєстру.', opts);
+  if (/уже формується/i.test(r.text || '')) bot_send(chatId, 'Реєстр уже формується — зачекайте кілька хвилин, нічого повторно не натискайте.', opts);
+  else if (!/створено|надіслано|перевідправив/i.test(r.text || '')) bot_send(chatId, 'Немає нових ТТН для реєстру.', opts);
   else bot_sendToOwners('🗂 Реєстр створено на запит ' + bot_esc([from.first_name, from.username].filter(Boolean).join(' ')) + ' (з гілки «Реєстри»).');
 }
 

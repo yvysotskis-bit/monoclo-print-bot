@@ -22,8 +22,11 @@ function bot_parsePayText(text) {
     v = parseFloat(raw.replace(/ /g, '').replace(',', '.'));
   } else if (/^[1-9]\d{0,2}(?:\.\d{3})+$/.test(raw)) {                                // «25.000» — крапка як роздільник тисяч
     v = Number(raw.replace(/\./g, ''));
+  } else if (/^[1-9]\d{0,2}(?:,\d{3})+(?:\.\d{1,2})?$/.test(raw)) {                    // «10,000», «1,500», «10,000.00» — кома як роздільник тисяч
+    v = parseFloat(raw.replace(/,/g, ''));
   } else if (/^\d+(?:[.,]\d{1,2})?$/.test(raw)) {                                // «14300», «1,5», «1500.50»
-    if (/^\d{1,2}[.,]\d{2}$/.test(raw)) return null;                           // «+10.09» схоже на дату — не вгадуємо (для малих сум є /addpay)
+    var dm = raw.match(/^(\d{1,2})[.,](\d{2})$/);
+    if (dm && Number(dm[1]) >= 1 && Number(dm[1]) <= 31 && Number(dm[2]) >= 1 && Number(dm[2]) <= 12) return null;   // «+10.09» схоже на дату — не вгадуємо (для малих сум є /addpay)
     v = parseFloat(raw.replace(',', '.'));
   } else return null;
   v = bot_round2(v);
@@ -129,7 +132,13 @@ function bot_handlePayMessage(msg, edited) {
   var pt = bot_setting('PAY_THREAD_ID');
   if (pt !== '' && pt !== '0' && bot_threadOf(msg) !== String(pt)) return;
   var sum = bot_parsePayText(msg.text || msg.caption || '');
-  if (sum === null) return;
+  if (sum === null) {                                                     // «+...» з цифрою, але не розпізнано — не мовчимо
+    var raw = String(msg.text || msg.caption || '').trim();
+    if (/^\+\s*\d/.test(raw)) {
+      try { bot_sendToOwners('⚠️ Оплату «' + bot_esc(raw.slice(0, 60)) + '» не розпізнав — у таблицю НЕ внесено. Напишіть суму простіше («+15000», «+15к») або команда <code>/addpay сума</code>.'); } catch (e) { bot_log('ПОМИЛКА', 'оплата не розпізнана', String(e)); }
+    }
+    return;
+  }
   var date = bot_makeDateFrom_(new Date(msg.date * 1000)), op = bot_openingFromSettings();
   if (op && !bot_afterCut_(date, op.ordersAfter)) return;                  // до вересня — вже в початковому залишку
   var key = 'tg-' + msg.message_id;
