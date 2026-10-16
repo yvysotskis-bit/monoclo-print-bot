@@ -87,10 +87,12 @@ function bot_renderItem_(it, o) {
   if (it.kind === 'tee') {
     if (o.teeShort) { if (it.color) parts.push((BOT_COLOR_SHORT_[it.color] || '') + (it.washed ? ' виварена' : '')); }
     else parts.push('футболка' + (it.color ? ' ' + BOT_COLOR_FEM_[it.color] : '') + (it.washed ? ' виварена' : ''));
+  } else if (o.hoodieX) {                                                  // слово «худі» прибрано: лишається x + цифра кольору (x1 = чорний теж пишемо, інакше не видно, що це худі)
+    parts.push((o.latinX ? 'x' : 'х') + (it.code || 1) + (it.washed ? ' виварене' : ''));
   } else {
     parts.push('худі' + (it.washed ? ' виварене' : ''));   // колір худі несе код хN
   }
-  if (it.code > 1) parts.push((o.latinX ? 'x' : 'х') + it.code);          // код кольору худі: х2/х3/х4 (х1 = чорний, не пишемо)
+  if (it.code > 1 && !o.hoodieX) parts.push((o.latinX ? 'x' : 'х') + it.code);          // код кольору худі: х2/х3/х4 (х1 = чорний, не пишемо)
   if (it.kind === 'hoodie' && it.noFleece) parts.push('БЕЗ ФЛІСУ');
   if (it.size) parts.push(it.size);
   var s = parts.filter(Boolean).join(' ');
@@ -130,12 +132,12 @@ function bot_overflowTexts_(items) {
   var thing = function (it, full) {
     var t;
     if (it.kind === 'tee') t = (BOT_COLOR_SHORT_[it.color] || 'футб') + (it.washed ? ' виварена' : '');
-    else if (it.kind === 'hoodie') t = 'худі' + (it.washed ? ' виварене' : '');
+    else if (it.kind === 'hoodie') t = 'x' + (it.code || 1) + (it.washed ? ' виварене' : '');
     else if (it.kind === 'sticker') t = bot_nameForLevel_(it, { glue: true });
     else if (it.kind === 'cap') t = 'кепка';
     else t = '';
     if (full) {
-      if (it.code > 1) t += ' х' + it.code;
+      if (it.code > 1 && it.kind !== 'hoodie') t += ' х' + it.code;
       if (it.kind === 'hoodie' && it.noFleece) t += ' БЕЗ ФЛІСУ';
       if (it.size) t += ' ' + it.size;
     }
@@ -177,13 +179,15 @@ function bot_buildDescription(list, limit, mode) {
     var full = bot_renderAll_(items, base, '');
     if (bot_len(full) <= limit) return { text: full, len: bot_len(full), level: 1, overflow: false };
     var canH = bot_canHoist_(items), multiple = items.length > 1;
-    var tiers = [
-      { o: { hoist: false, keepStickerWord: true, latinX: true, dropName: true }, sfx: [''], lv: 2 }
-    ];
+    var D = { keepStickerWord: true, latinX: true, dropName: true }, mk = function (extra) { var o = {}; Object.keys(D).forEach(function (k) { o[k] = D[k]; }); Object.keys(extra).forEach(function (k) { o[k] = extra[k]; }); return o; };
+    var hs = multiple ? ['Всі позаду', 'Позаду'] : ['Позаду'];
+    var tiers = [{ o: mk({ hoist: false }), sfx: [''], lv: 2 }];
     if (canH) {
-      tiers.push({ o: { hoist: true, keepStickerWord: true, latinX: true, dropName: true }, sfx: multiple ? ['Всі позаду', 'Позаду'] : ['Позаду'], lv: 3 });
-      tiers.push({ o: { hoist: true, keepStickerWord: true, latinX: true, dropName: true, teeShort: true }, sfx: multiple ? ['Всі позаду', 'Позаду'] : ['Позаду'], lv: 4 });
+      tiers.push({ o: mk({ hoist: true }), sfx: hs, lv: 3 });
+      tiers.push({ o: mk({ hoist: true, teeShort: true }), sfx: hs, lv: 4 });
+      tiers.push({ o: mk({ hoist: true, teeShort: true, hoodieX: true }), sfx: hs, lv: 5 });          // «худі» → лише «x3» (за побажанням складу)
     }
+    tiers.push({ o: mk({ hoist: false, teeShort: true, hoodieX: true }), sfx: [''], lv: 6 });
     for (var ti = 0; ti < tiers.length; ti++) for (var si = 0; si < tiers[ti].sfx.length; si++) {
       var tx = bot_renderAll_(items, tiers[ti].o, tiers[ti].sfx[si]);
       if (bot_len(tx) <= limit) return { text: tx, len: bot_len(tx), level: tiers[ti].lv, overflow: false };

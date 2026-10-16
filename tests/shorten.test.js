@@ -135,9 +135,21 @@ test('Формат за замовчуванням: драбина без наз
   const m = descFull(`${mix}\n\n${TTN}`);
   assert.ok(m.len <= 100 && !m.overflow, m.text);
   ['15200', '15201', '15202', '15203', '15204', '15205'].forEach(n => assert.ok(m.text.includes(n), m.text));
-  assert.ok(/худі/.test(m.text) || /^[\d, -]+$/.test(m.text), m.text);
+  assert.ok(/худі|x\d/.test(m.text) || /^[\d, -]+$/.test(m.text), m.text);
   // назва принта не губиться, коли все вміщається
   assert.equal(descFull(`15110. Принт Berserk\nХуді x1 БЕЗ ФЛІСУ\nL\nПринт позаду\n\n${TTN}`).text, '15110 Berserk худі БЕЗ ФЛІСУ L, принт позаду');
   // стікерпак/кепка: назва — це і є річ, не прибирається
   assert.ok(descFull(`15300. Стікерпак Ландо Норріс\n\n15301. Принт Very Long Print Name Here Too\nФутболка чорна\nM\nПринт позаду\n\n15302. Принт Another Very Long Name Again\nФутболка біла\nL\nПринт позаду\n\n${TTN}`).text.includes('Ландо Норріс'));
+});
+
+test('Опис: коли тісно, слово «худі» замінюється кодом кольору xN (x1 теж пишемо), футболки/кепки/стікерпаки — як були', () => {
+  const blocks = [['15400', 'Худі x3 БЕЗ ФЛІСУ', 'L'], ['15401', 'Худі x1 БЕЗ ФЛІСУ', 'XL'], ['15402', 'Худі x2 БЕЗ ФЛІСУ', 'M'], ['15403', 'Футболка чорна', 'S'], ['15404', 'Худі x4 БЕЗ ФЛІСУ', 'M']]
+    .map(([n, t, sz]) => `${n}. Принт Long Print Name Here\n${t}\n${sz}\nПринт позаду`).join('\n\n');
+  const r = descFull(`${blocks}\n\n${TTN}`);
+  assert.ok(r.len <= 100 && !r.overflow, r.text);
+  ['15400', '15401', '15402', '15403', '15404'].forEach(n => assert.ok(r.text.includes(n), r.text));
+  assert.ok(!/худі/.test(r.text), r.text);                                                   // слово прибрано
+  assert.ok(/15401 x1/.test(r.text), r.text);                                                // x1 (чорний) теж видно
+  assert.ok(/15402 x2/.test(r.text) && /15404 x4/.test(r.text), r.text);
+  assert.ok(/15403 (чор|футболка)/.test(r.text), r.text);                                    // футболка лишилась футболкою
 });
