@@ -4174,7 +4174,7 @@ function bot_ttnSync(msg, caption, list, edited) {
       if (groups[r.ttn] || r.status === 'Знято') return;
       var own = bot_baseMsgKey_(r.msgId) === mid, rowNos = bot_ttnOrderNos(r.orders);
       if (!own && !list.some(function (p) { return rowNos.indexOf(p.no) >= 0 && p.ttn !== r.ttn; })) return;
-      if (r.registry) { if (own) bot_sendToOwners('⚠️ ТТН ' + bot_code(r.ttn) + ' прибрано з повідомлення, але вона вже в реєстрі №' + bot_esc(r.registry) + ' — перевірте вручну.' + linkTxt); return; }
+      if (r.registry) { if (own) bot_log('ІНФО', 'ТТН ' + r.ttn, 'прибрано з повідомлення, але вже в реєстрі ' + r.registry + ' — не чіпаю'); return; }
       var others = ordersT.filter(function (o) { return o.ttn === r.ttn && o.status !== 'Скасовано' && Number(o.no) > 0 && bot_baseMsgKey_(o.msgId) !== mid; });
       if (others.length) {
         var left = others.sort(function (a, b) { return a.no - b.no; }).map(bot_orderAsParsed_);
@@ -4206,11 +4206,7 @@ function bot_ttnSync(msg, caption, list, edited) {
     }
     var sameMsg = bot_baseMsgKey_(ex.msgId) === mid;
     if (!sameMsg) {                                                                  // ТТН уже є з ІНШОГО повідомлення (нове, повтор або редагування)
-      if (ex.registry) {                                                             // уже в реєстрі: пишемо власнику лише якщо склад замовлень справді інший
-        var kn = bot_ttnOrderNos(ex.orders);
-        if (edited && g.some(function (p) { return kn.indexOf(p.no) < 0; })) bot_sendToOwners('⚠️ ТТН ' + bot_code(ttn) + ' уже в реєстрі №' + bot_esc(ex.registry) + ' — зміни в повідомленні не застосовую.' + linkTxt);
-        return;
-      }
+      if (ex.registry) { if (edited) bot_log('ІНФО', 'ТТН ' + ttn, 'повідомлення змінено, але ТТН уже в реєстрі ' + ex.registry + ' — не чіпаю'); return; }
       var tbl = bot_readOrders(), live = g.filter(function (p) {
         return !tbl.some(function (o) { return o.no === p.no && o.status === 'Скасовано'; });
       });
@@ -4225,8 +4221,8 @@ function bot_ttnSync(msg, caption, list, edited) {
       return;
     }
     if (!edited) return;                                                              // повтор того самого повідомлення
-    if (ex.registry) {
-      if (ex.original !== caption && bot_ttnDescOfCaption_(ex.original, ttn) !== d.text) bot_sendToOwners('⚠️ ТТН ' + bot_code(ttn) + ' уже в реєстрі №' + bot_esc(ex.registry) + ' — зміни в повідомленні не застосовую (опис у НП лишається).' + linkTxt);
+    if (ex.registry) {                                                                // ТТН уже в реєстрі — опис у НП остаточний; власника не турбуємо, лише журнал
+      if (ex.original !== caption) bot_log('ІНФО', 'ТТН ' + ttn, 'повідомлення змінено, але ТТН уже в реєстрі ' + ex.registry + ' — не чіпаю');
       return;
     }
     var manual = ex.note.indexOf('✏️') === 0;
