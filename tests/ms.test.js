@@ -915,3 +915,16 @@ test('Аудит №3: оплати «+10,000», «+1,500», «+10.000,00» ро
   assert.equal(c.bot_readPayments().length, 0);
   assert.ok(env.sentTo(OWNER).some(s => /не розпізнав/.test(s.text)));
 });
+
+test('Редагування повідомлення, ТТН якого вже в реєстрі: власнику пишемо лише коли змінився опис; дрібні правки — тиша', () => {
+  const env = liveEnv(); const c = env.ctx;
+  const u = env.update(groupMsg(CAPN(15101, T1))); env.poll();
+  env.setNow('2026-10-07T07:00:00Z'); env.poll();
+  assert.ok(ttnRows(env)[0].registry);
+  const warns = () => env.sentTo(OWNER).filter(s => /уже в реєстрі/.test(s.text)).length;
+  const w0 = warns();
+  env.update(edit(msgIdOf(u), CAPN(15101, T1) + '\nдодатковий коментар складу')); env.poll();       // опис не змінюється
+  assert.equal(warns(), w0);
+  env.update(edit(msgIdOf(u), CAPN(15101, T1).replace('\nL\n', '\nXXL\n'))); env.poll();             // розмір змінився → опис інший
+  assert.equal(warns(), w0 + 1);
+});

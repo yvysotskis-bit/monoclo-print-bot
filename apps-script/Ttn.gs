@@ -73,6 +73,12 @@ function bot_ttnThreadEvidence_(r, orders) {
   return !!r.msgId && String(r.original).replace(/[\s\u00a0]/g, '').indexOf(r.ttn) >= 0;      // ТТН у повідомленні могла бути записана з пробілами «2045 1556 …»
 }
 
+/** Опис, який бот побудував би з тексту повідомлення (поточним форматом): щоб не турбувати власника правками, що опис не міняють (адреса, зайве слово). */
+function bot_ttnDescOfCaption_(original, ttn) {
+  var g = bot_parseOrderMessage(String(original || '')).filter(function (p) { return p.ttn === ttn; });
+  return g.length ? bot_buildDescription(g, bot_descLimit(), bot_descMode()).text : null;
+}
+
 /** Замовлення ТТН з таблиці «Замовлення» (нескасовані) у вигляді розібраних — для відновлення опису. */
 function bot_ttnListFromOrders_(ttn, orders) {
   return orders.filter(function (o) { return o.ttn === ttn && o.status !== 'Скасовано' && Number(o.no) > 0; })
@@ -129,7 +135,11 @@ function bot_ttnSync(msg, caption, list, edited) {
     }
     var sameMsg = bot_baseMsgKey_(ex.msgId) === mid;
     if (!sameMsg) {                                                                  // ТТН уже є з ІНШОГО повідомлення (нове, повтор або редагування)
-      if (ex.registry) { if (edited) bot_sendToOwners('⚠️ ТТН ' + bot_code(ttn) + ' уже в реєстрі №' + bot_esc(ex.registry) + ' — зміни в повідомленні не застосовую.' + linkTxt); return; }
+      if (ex.registry) {                                                             // уже в реєстрі: пишемо власнику лише якщо склад замовлень справді інший
+        var kn = bot_ttnOrderNos(ex.orders);
+        if (edited && g.some(function (p) { return kn.indexOf(p.no) < 0; })) bot_sendToOwners('⚠️ ТТН ' + bot_code(ttn) + ' уже в реєстрі №' + bot_esc(ex.registry) + ' — зміни в повідомленні не застосовую.' + linkTxt);
+        return;
+      }
       var tbl = bot_readOrders(), live = g.filter(function (p) {
         return !tbl.some(function (o) { return o.no === p.no && o.status === 'Скасовано'; });
       });
@@ -145,7 +155,7 @@ function bot_ttnSync(msg, caption, list, edited) {
     }
     if (!edited) return;                                                              // повтор того самого повідомлення
     if (ex.registry) {
-      if (ex.original !== caption) bot_sendToOwners('⚠️ ТТН ' + bot_code(ttn) + ' уже в реєстрі №' + bot_esc(ex.registry) + ' — зміни в повідомленні не застосовую (опис у НП лишається).' + linkTxt);
+      if (ex.original !== caption && bot_ttnDescOfCaption_(ex.original, ttn) !== d.text) bot_sendToOwners('⚠️ ТТН ' + bot_code(ttn) + ' уже в реєстрі №' + bot_esc(ex.registry) + ' — зміни в повідомленні не застосовую (опис у НП лишається).' + linkTxt);
       return;
     }
     var manual = ex.note.indexOf('✏️') === 0;

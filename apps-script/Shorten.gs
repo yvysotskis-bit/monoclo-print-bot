@@ -2,7 +2,7 @@
  * Shorten.gs — Модуль B: скорочення опису ТТН до ≤ 100 символів (розділ 5 ТЗ).
  * ЧИСТА логіка: жодних викликів Google API, перевіряється в Node.
  *
- * Режим за замовчуванням — «повний або лише номери» (налаштування DESC_MODE = повний); режим «драбина» (mode === 'ladder') — драбина з розділу 5 ТЗ.
+ * Режим за замовчуванням (DESC_MODE = повний): повний опис → без назви принта → «позаду» одним словом → номер + річ → лише номери; режим «драбина» (mode === 'ladder') — драбина з розділу 5 ТЗ.
  * Вхід — масив замовлень з bot_parseOrderMessage (одне повідомлення = одна ТТН).
  * Вихід — {text, len, level, overflow}.
  *
@@ -82,7 +82,7 @@ function bot_renderItem_(it, o) {
   if (it.kind === 'cap') return it.no + ' ' + (/^кепк/i.test(it.raw) ? it.raw : 'Кепка ' + it.raw).replace(/\s+/g, ' ').trim();
   if (it.kind === 'other') return it.no + ' ' + bot_nameForLevel_(it, o);
   var parts = [String(it.no)];
-  var nm = bot_nameForLevel_(it, o);
+  var nm = o.dropName ? '' : bot_nameForLevel_(it, o);                 // dropName: назву принта не пишемо (вона не обов'язкова для складу)
   if (nm) parts.push(nm);
   if (it.kind === 'tee') {
     if (o.teeShort) { if (it.color) parts.push((BOT_COLOR_SHORT_[it.color] || '') + (it.washed ? ' виварена' : '')); }
@@ -170,10 +170,26 @@ function bot_buildDescription(list, limit, mode) {
   var items = bot_descItems(list);
   if (!items.length) return { text: '', len: 0, level: 0, overflow: false };
   if (mode !== 'ladder') {
-    // Формат власника: повний опис кожного замовлення («15037 No-Risk (W) худі x3 БЕЗ ФЛІСУ S, принт позаду»);
-    // якщо не вміщається в ліміт — лише номери замовлень через кому (далі діапазон), без проміжних скорочень.
-    var full = bot_renderAll_(items, { hoist: false, keepStickerWord: true, latinX: true }, '');
+    // Формат власника: повний опис кожного замовлення («15037 No-Risk (W) худі x3 БЕЗ ФЛІСУ S, принт позаду»).
+    // Не вміщається — спочатку прибираємо назву принта (склад просив: номер + річ + розмір + «принт позаду/спереду»), потім «позаду» одним словом,
+    // потім «номер + річ + розмір», «номер + річ» і лише в останню чергу — самі номери.
+    var base = { hoist: false, keepStickerWord: true, latinX: true };
+    var full = bot_renderAll_(items, base, '');
     if (bot_len(full) <= limit) return { text: full, len: bot_len(full), level: 1, overflow: false };
+    var canH = bot_canHoist_(items), multiple = items.length > 1;
+    var tiers = [
+      { o: { hoist: false, keepStickerWord: true, latinX: true, dropName: true }, sfx: [''], lv: 2 }
+    ];
+    if (canH) {
+      tiers.push({ o: { hoist: true, keepStickerWord: true, latinX: true, dropName: true }, sfx: multiple ? ['Всі позаду', 'Позаду'] : ['Позаду'], lv: 3 });
+      tiers.push({ o: { hoist: true, keepStickerWord: true, latinX: true, dropName: true, teeShort: true }, sfx: multiple ? ['Всі позаду', 'Позаду'] : ['Позаду'], lv: 4 });
+    }
+    for (var ti = 0; ti < tiers.length; ti++) for (var si = 0; si < tiers[ti].sfx.length; si++) {
+      var tx = bot_renderAll_(items, tiers[ti].o, tiers[ti].sfx[si]);
+      if (bot_len(tx) <= limit) return { text: tx, len: bot_len(tx), level: tiers[ti].lv, overflow: false };
+    }
+    var ovs = bot_overflowTexts_(items);
+    for (var oi = 0; oi < 2; oi++) if (bot_len(ovs[oi]) <= limit) return { text: ovs[oi], len: bot_len(ovs[oi]), level: 7 + oi, overflow: false };
     var nums = bot_overflowTexts_(items)[2];
     if (bot_len(nums) <= limit) return { text: nums, len: bot_len(nums), level: 9, overflow: false };
     var rg0 = bot_urgentPrefix_(items) + bot_numberRanges(items.map(function (i) { return i.no; }));

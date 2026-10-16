@@ -109,10 +109,10 @@ test('Крайнє переповнення: послідовні номери �
 
 test('Формат за замовчуванням: повний опис (x латинська, як у власника) або лише номери', () => {
   assert.equal(descFull(`15037. Принт no-risk (W) Худі x3 ❗️БЕЗ ФЛІСУ S\n\nПринт позаду\n\n${TTN}`).text, '15037 No-Risk (W) худі x3 БЕЗ ФЛІСУ S, принт позаду');
-  // три футболки (111 символів повним форматом) → лише номери
+  // три футболки (111 символів повним форматом) → без назв принтів, «позаду» одним словом (склад просив номер + річ, а не самі номери)
   const three = `14634. Принт Cuba Libre (W)\nФутболка чорна\nXL\nПринт позаду\n\n14635. Принт CV (W)\nФутболка чорна\nXL\nПринт позаду\n\n14636. Принт Bill\nФутболка чорна\nM\nПринт позаду\n\n${TTN}`;
   const r = descFull(three);
-  assert.equal(r.text, '14634, 14635, 14636'); assert.equal(r.overflow, false);
+  assert.equal(r.text, '14634 футболка чорна XL. 14635 футболка чорна XL. 14636 футболка чорна M. Всі позаду'); assert.equal(r.overflow, false); assert.ok(r.len <= 100);
   // два замовлення, що вміщаються → обидва повні, через «. »
   const two = `14858. Стікерпак Ландо Норріс\n\n14859. Принт McLaren 1963 (W) + Lando-Logo\nХуді x3 БЕЗ ФЛІСУ\nS\nПринти як на візуалі\n\n${TTN}`;
   assert.equal(descFull(two).text, '14858 Стікерпак Ландо Норріс. 14859 McLaren 1963 (W)+Lando-Logo худі x3 БЕЗ ФЛІСУ S, як на візуалі');
@@ -122,4 +122,22 @@ test('Формат за замовчуванням: повний опис (x л�
   assert.equal(descFull(`${many}\n\n${TTN}`).text, '14732-14750');
   const sparse = Array.from({ length: 30 }, (_, i) => `${15300 + i * 2}. Принт A\nФутболка чорна\nM\nПринт позаду`).join('\n\n');
   assert.equal(descFull(`${sparse}\n\n${TTN}`).overflow, true);
+});
+
+test('Формат за замовчуванням: драбина без назви принта — номер + річ + розмір, і лише потім самі номери', () => {
+  // 2 худі: повний формат > 100, без назви принта влізає з «принт позаду» біля кожного
+  const two = `15110. Принт Berserk Guts Edition (W)\nХуді x3 БЕЗ ФЛІСУ\nL\nПринт позаду\n\n15111. Принт Another Long Print Name\nХуді x2 БЕЗ ФЛІСУ\nXL\nПринт позаду\n\n${TTN}`;
+  const r = descFull(two);
+  assert.ok(r.len <= 100 && !/Berserk|Another/.test(r.text), r.text);
+  assert.ok(r.text.includes('15110') && r.text.includes('15111') && r.text.includes('L') && /позаду/.test(r.text), r.text);
+  // «спереду» не можна винести в «Всі позаду» — розміщення лишається біля речі, а коли й так не влізло — номер + річ + розмір
+  const mix = Array.from({ length: 6 }, (_, i) => `${15200 + i}. Принт Aaaa Bbbb\nХуді x1 БЕЗ ФЛІСУ\nXL\nПринт ${i % 2 ? 'спереду' : 'позаду'}`).join('\n\n');
+  const m = descFull(`${mix}\n\n${TTN}`);
+  assert.ok(m.len <= 100 && !m.overflow, m.text);
+  ['15200', '15201', '15202', '15203', '15204', '15205'].forEach(n => assert.ok(m.text.includes(n), m.text));
+  assert.ok(/худі/.test(m.text) || /^[\d, -]+$/.test(m.text), m.text);
+  // назва принта не губиться, коли все вміщається
+  assert.equal(descFull(`15110. Принт Berserk\nХуді x1 БЕЗ ФЛІСУ\nL\nПринт позаду\n\n${TTN}`).text, '15110 Berserk худі БЕЗ ФЛІСУ L, принт позаду');
+  // стікерпак/кепка: назва — це і є річ, не прибирається
+  assert.ok(descFull(`15300. Стікерпак Ландо Норріс\n\n15301. Принт Very Long Print Name Here Too\nФутболка чорна\nM\nПринт позаду\n\n15302. Принт Another Very Long Name Again\nФутболка біла\nL\nПринт позаду\n\n${TTN}`).text.includes('Ландо Норріс'));
 });
