@@ -1986,11 +1986,20 @@ function bot_placementTail_(it) {
   return t;
 }
 
+/** Номер замовлення в описі: повний («15150») або короткий («150» — без спільного «15» на початку; склад так просив). */
+function bot_showNo_(it, o) { return o && o.shortNo ? it.sno : String(it.no); }
+
+/** Короткі номери — лише коли всі замовлення з однієї «тисячі» (15150, 15151 → 150, 151); інакше лишаємо повні, щоб не переплутати. */
+function bot_setShortNos_(items) {
+  var uniform = items.length > 0 && items.every(function (i) { return i.no >= 1000 && Math.floor(i.no / 1000) === Math.floor(items[0].no / 1000); });
+  items.forEach(function (i) { i.sno = uniform ? ('00' + (i.no % 1000)).slice(-3) : String(i.no); });
+}
+
 function bot_renderItem_(it, o) {
-  if (it.kind === 'sticker') return it.no + ' ' + (o.keepStickerWord ? 'Стікерпак ' : '') + bot_nameForLevel_(it, o);
-  if (it.kind === 'cap') return it.no + ' ' + (/^кепк/i.test(it.raw) ? it.raw : 'Кепка ' + it.raw).replace(/\s+/g, ' ').trim();
-  if (it.kind === 'other') return it.no + ' ' + bot_nameForLevel_(it, o);
-  var parts = [String(it.no)];
+  if (it.kind === 'sticker') return bot_showNo_(it, o) + ' ' + (o.keepStickerWord ? 'Стікерпак ' : '') + bot_nameForLevel_(it, o);
+  if (it.kind === 'cap') return bot_showNo_(it, o) + ' ' + (/^кепк/i.test(it.raw) ? it.raw : 'Кепка ' + it.raw).replace(/\s+/g, ' ').trim();
+  if (it.kind === 'other') return bot_showNo_(it, o) + ' ' + bot_nameForLevel_(it, o);
+  var parts = [bot_showNo_(it, o)];
   var nm = o.dropName ? '' : bot_nameForLevel_(it, o);                 // dropName: назву принта не пишемо (вона не обов'язкова для складу)
   if (nm) parts.push(nm);
   if (it.kind === 'tee') {
@@ -2036,7 +2045,7 @@ var BOT_LADDER_ = [
 ];
 
 /** Крайній випадок (за вказівкою власника): номер + річ, далі лише номери через кому. */
-function bot_overflowTexts_(items) {
+function bot_overflowTexts_(items, shortNo) {
   var pre = bot_urgentPrefix_(items);
   var thing = function (it, full) {
     var t;
@@ -2050,23 +2059,24 @@ function bot_overflowTexts_(items) {
       if (it.kind === 'hoodie' && it.noFleece) t += ' БЕЗ ФЛІСУ';
       if (it.size) t += ' ' + it.size;
     }
-    return (it.no + ' ' + t).trim();
+    return (bot_showNo_(it, { shortNo: shortNo }) + ' ' + t).trim();
   };
   return [
     pre + items.map(function (i) { return thing(i, true); }).join(', '),
     pre + items.map(function (i) { return thing(i, false); }).join(', '),
-    pre + items.map(function (i) { return String(i.no); }).join(', ')
+    pre + items.map(function (i) { return bot_showNo_(i, { shortNo: shortNo }); }).join(', ')
   ];
 }
 
 /** Номери → «14732-14750» для послідовних серій з 3+ номерів; решта через кому. */
-function bot_numberRanges(nos) {
+function bot_numberRanges(nos, fmt) {
+  fmt = fmt || String;
   var a = nos.map(Number).filter(function (n) { return n > 0; }).sort(function (x, y) { return x - y; });
   var out = [], i = 0;
   while (i < a.length) {
     var j = i;
     while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++;
-    if (j - i >= 2) out.push(a[i] + '-' + a[j]); else for (var k = i; k <= j; k++) out.push(String(a[k]));
+    if (j - i >= 2) out.push(fmt(a[i]) + '-' + fmt(a[j])); else for (var k = i; k <= j; k++) out.push(fmt(a[k]));
     i = j + 1;
   }
   return out.join(', ');
@@ -2084,6 +2094,7 @@ function bot_buildDescription(list, limit, mode) {
     // Формат власника: повний опис кожного замовлення («15037 No-Risk (W) худі x3 БЕЗ ФЛІСУ S, принт позаду»).
     // Не вміщається — спочатку прибираємо назву принта (склад просив: номер + річ + розмір + «принт позаду/спереду»), потім «позаду» одним словом,
     // потім «номер + річ + розмір», «номер + річ» і лише в останню чергу — самі номери.
+    bot_setShortNos_(items);
     var base = { hoist: false, keepStickerWord: true, latinX: true };
     var full = bot_renderAll_(items, base, '');
     if (bot_len(full) <= limit) return { text: full, len: bot_len(full), level: 1, overflow: false };
@@ -2097,16 +2108,19 @@ function bot_buildDescription(list, limit, mode) {
       tiers.push({ o: mk({ hoist: true, teeShort: true, hoodieX: true }), sfx: hs, lv: 5 });          // «худі» → лише «x3» (за побажанням складу)
     }
     tiers.push({ o: mk({ hoist: false, teeShort: true, hoodieX: true }), sfx: [''], lv: 6 });
+    // ще тісніше: номери без спільного «15» на початку (15150 → 150)
+    if (canH) tiers.push({ o: mk({ hoist: true, teeShort: true, hoodieX: true, shortNo: true }), sfx: hs, lv: 6 });
+    tiers.push({ o: mk({ hoist: false, teeShort: true, hoodieX: true, shortNo: true }), sfx: [''], lv: 6 });
     for (var ti = 0; ti < tiers.length; ti++) for (var si = 0; si < tiers[ti].sfx.length; si++) {
       var tx = bot_renderAll_(items, tiers[ti].o, tiers[ti].sfx[si]);
       if (bot_len(tx) <= limit) return { text: tx, len: bot_len(tx), level: tiers[ti].lv, overflow: false };
     }
-    var ovs = bot_overflowTexts_(items);
+    var ovs = bot_overflowTexts_(items, true);
     for (var oi = 0; oi < 2; oi++) if (bot_len(ovs[oi]) <= limit) return { text: ovs[oi], len: bot_len(ovs[oi]), level: 7 + oi, overflow: false };
-    var nums = bot_overflowTexts_(items)[2];
+    var nums = ovs[2];
+    var rg0 = bot_urgentPrefix_(items) + bot_numberRanges(items.map(function (i) { return i.no; }), function (n) { return bot_showNo_(items.filter(function (i) { return i.no === n; })[0], { shortNo: true }); });
+    if (bot_len(rg0) <= limit) return { text: rg0, len: bot_len(rg0), level: 10, overflow: false };       // «150-155»: середні номери не пишемо (за побажанням складу)
     if (bot_len(nums) <= limit) return { text: nums, len: bot_len(nums), level: 9, overflow: false };
-    var rg0 = bot_urgentPrefix_(items) + bot_numberRanges(items.map(function (i) { return i.no; }));
-    if (bot_len(rg0) <= limit) return { text: rg0, len: bot_len(rg0), level: 10, overflow: false };
     return { text: nums, len: bot_len(nums), level: 9, overflow: true };
   }
   var multi = items.length > 1;

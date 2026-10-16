@@ -119,7 +119,7 @@ test('Формат за замовчуванням: повний опис (x л�
   assert.equal(descFull(`ТЕРМІНОВО\n15500. Принт Test\nФутболка біла\nL\nПринт позаду\n${TTN}`).text, 'ТЕРМІНОВО 15500 Test футболка біла L, принт позаду');
   // 19 послідовних — діапазон; не влізло навіть так — потрібне рішення
   const many = Array.from({ length: 19 }, (_, i) => `${14732 + i}. Принт A\nХуді x1 БЕЗ ФЛІСУ\nXL\nПринт позаду`).join('\n\n');
-  assert.equal(descFull(`${many}\n\n${TTN}`).text, '14732-14750');
+  assert.equal(descFull(`${many}\n\n${TTN}`).text, '732-750');                      // без спільного «15»/«14» на початку
   const sparse = Array.from({ length: 30 }, (_, i) => `${15300 + i * 2}. Принт A\nФутболка чорна\nM\nПринт позаду`).join('\n\n');
   assert.equal(descFull(`${sparse}\n\n${TTN}`).overflow, true);
 });
@@ -134,7 +134,7 @@ test('Формат за замовчуванням: драбина без наз
   const mix = Array.from({ length: 6 }, (_, i) => `${15200 + i}. Принт Aaaa Bbbb\nХуді x1 БЕЗ ФЛІСУ\nXL\nПринт ${i % 2 ? 'спереду' : 'позаду'}`).join('\n\n');
   const m = descFull(`${mix}\n\n${TTN}`);
   assert.ok(m.len <= 100 && !m.overflow, m.text);
-  ['15200', '15201', '15202', '15203', '15204', '15205'].forEach(n => assert.ok(m.text.includes(n), m.text));
+  ['200', '201', '202', '203', '204', '205'].forEach(n => assert.ok(m.text.includes(n), m.text));
   assert.ok(/худі|x\d/.test(m.text) || /^[\d, -]+$/.test(m.text), m.text);
   // назва принта не губиться, коли все вміщається
   assert.equal(descFull(`15110. Принт Berserk\nХуді x1 БЕЗ ФЛІСУ\nL\nПринт позаду\n\n${TTN}`).text, '15110 Berserk худі БЕЗ ФЛІСУ L, принт позаду');
@@ -147,9 +147,21 @@ test('Опис: коли тісно, слово «худі» замінюєть�
     .map(([n, t, sz]) => `${n}. Принт Long Print Name Here\n${t}\n${sz}\nПринт позаду`).join('\n\n');
   const r = descFull(`${blocks}\n\n${TTN}`);
   assert.ok(r.len <= 100 && !r.overflow, r.text);
-  ['15400', '15401', '15402', '15403', '15404'].forEach(n => assert.ok(r.text.includes(n), r.text));
+  ['400', '401', '402', '403', '404'].forEach(n => assert.ok(r.text.includes(n), r.text));
   assert.ok(!/худі/.test(r.text), r.text);                                                   // слово прибрано
-  assert.ok(/15401 x1/.test(r.text), r.text);                                                // x1 (чорний) теж видно
-  assert.ok(/15402 x2/.test(r.text) && /15404 x4/.test(r.text), r.text);
-  assert.ok(/15403 (чор|футболка)/.test(r.text), r.text);                                    // футболка лишилась футболкою
+  assert.ok(/401 x1/.test(r.text), r.text);                                                // x1 (чорний) теж видно
+  assert.ok(/402 x2/.test(r.text) && /404 x4/.test(r.text), r.text);
+  assert.ok(/403 (чор|футболка)/.test(r.text), r.text);                                    // футболка лишилась футболкою
+});
+
+test('Опис: короткі номери (15150 → 150) лише коли всі замовлення з однієї «тисячі»; діапазон 150-155', () => {
+  const six = Array.from({ length: 6 }, (_, i) => `${15150 + i}. Принт A\nХуді x1 БЕЗ ФЛІСУ\nXL\nПринт позаду`).join('\n\n');
+  assert.equal(descFull(`${six}\n\n${TTN}`).text.includes('15150'), false);
+  const nineteen = Array.from({ length: 19 }, (_, i) => `${15150 + i}. Принт A\nХуді x1 БЕЗ ФЛІСУ\nXL\nПринт позаду`).join('\n\n');
+  assert.equal(descFull(`${nineteen}\n\n${TTN}`).text, '150-168');
+  // різні «тисячі» (15999 і 16000) — повні номери, щоб не переплутати
+  const cross = Array.from({ length: 19 }, (_, i) => `${15990 + i}. Принт A\nХуді x1 БЕЗ ФЛІСУ\nXL\nПринт позаду`).join('\n\n');
+  assert.equal(descFull(`${cross}\n\n${TTN}`).text, '15990-16008');
+  // повний формат не чіпаємо
+  assert.equal(descFull(`15110. Принт Berserk\nХуді x1 БЕЗ ФЛІСУ\nL\nПринт позаду\n\n${TTN}`).text, '15110 Berserk худі БЕЗ ФЛІСУ L, принт позаду');
 });
