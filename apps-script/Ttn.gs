@@ -228,6 +228,53 @@ function bot_cmdDesc(chatId, arg) {
     '\nОпис (' + r.len + ' симв.): <i>' + bot_esc(r.desc) + '</i>' + (r.note ? '\n' + bot_esc(r.note) : ''));
 }
 
+
+/** Автоматичний опис рядка «ТТН» поточним форматом: з тексту повідомлення + замовлень з таблиці (для ТТН з кількох повідомлень). */
+function bot_ttnAutoDesc_(r, orders) {
+  var g = bot_parseOrderMessage(r.original).filter(function (p) { return p.ttn === r.ttn; });
+  var nos = g.map(function (p) { return p.no; });
+  var all = g.concat(bot_ttnListFromOrders_(r.ttn, orders).filter(function (x) { return nos.indexOf(x.no) < 0; }));
+  if (!all.length) return null;
+  all.sort(function (a, b) { return a.no - b.no; });
+  return { list: all, d: bot_buildDescription(all, bot_descLimit(), bot_descMode()) };
+}
+
+/**
+ * /redesc — перерахувати автоматичні описи ТТН, що ще НЕ в реєстрі, за поточним форматом (напр. після зміни формату).
+ *   /redesc          — лише показати, що зміниться (нічого не пише)
+ *   /redesc now      — застосувати до всіх таких ТТН (у НП запишу за кілька хвилин, ≤ 6 ТТН за хвилину)
+ *   /redesc <ТТН>    — одна ТТН, одразу
+ * Не чіпає: ТТН у реєстрі, «Знято», ваш власний текст (✏️), заблоковані ⛔ (для них /retry ТТН force).
+ */
+function bot_cmdRedesc(chatId, arg) {
+  var a = String(arg || '').trim(), now = /^now$/i.test(a), one = a && !now ? bot_normTtn(a) : '';
+  if (a && !now && !bot_isTtn(one)) return bot_send(chatId, 'Формат: <code>/redesc</code> (показати), <code>/redesc now</code> (застосувати до всіх), <code>/redesc 20451556067718</code> (одна ТТН).');
+  var orders = bot_readOrders(), rows = bot_readTtnRows(), todo = [], skipped = { registry: 0, manual: 0, blocked: 0, same: 0, none: 0 };
+  rows.forEach(function (r) {
+    if (one && r.ttn !== one) return;
+    if (r.status === 'Знято') return;
+    if (r.registry) { skipped.registry++; return; }
+    if (String(r.note).indexOf('✏️') === 0) { skipped.manual++; return; }
+    if (r.status === 'Помилка НП' && String(r.note).indexOf('⛔') === 0) { skipped.blocked++; return; }
+    var x = bot_ttnAutoDesc_(r, orders);
+    if (!x) { skipped.none++; return; }
+    if (x.d.text === r.desc && r.status !== 'Чекає рішення') { skipped.same++; return; }
+    todo.push({ r: r, x: x });
+  });
+  if (one && !rows.some(function (r) { return r.ttn === one; })) return bot_send(chatId, 'Такої ТТН у гілці «Замовлення на клієнта» не бачу.');
+  var tail = '\nПропущено: ' + skipped.registry + ' у реєстрі, ' + skipped.manual + ' зі своїм текстом, ' + skipped.blocked + ' заблокованих ⛔, ' + skipped.same + ' уже з потрібним описом' + (skipped.none ? ', ' + skipped.none + ' без даних' : '') + '.';
+  if (!todo.length) return bot_send(chatId, 'Нічого оновлювати.' + tail);
+  if (!now && !one) {
+    var ex = todo.slice(0, 4).map(function (t) { return '• ' + bot_code(t.r.ttn) + '\n  було: <i>' + bot_esc(t.r.desc) + '</i>\n  буде: <i>' + bot_esc(t.x.d.text) + '</i>'; }).join('\n');
+    return bot_send(chatId, '🔎 Оновлю опис у <b>' + todo.length + '</b> ТТН (ще не в реєстрі).\n' + ex + (todo.length > 4 ? '\n… і ще ' + (todo.length - 4) : '') + tail + '\n\nЩоб застосувати: <code>/redesc now</code>');
+  }
+  bot_ttnPatch(todo.map(function (t) {
+    return { row: t.r._row, fields: { orders: t.x.list.map(function (p) { return p.no; }).join(', '), desc: t.x.d.text, len: t.x.d.len, status: t.x.d.overflow ? 'Чекає рішення' : 'Новий', note: t.x.d.overflow ? '⚠ не влізло в ' + bot_descLimit() + ' символів навіть у номерах' : '', written: '' } };
+  }));
+  bot_log('ІНФО', '/redesc', 'оновлено описів: ' + todo.length);
+  bot_send(chatId, '✅ Оновив опис у ' + todo.length + ' ТТН.' + (bot_npLive() ? ' У НП запишу за кілька хвилин (не більше 6 ТТН за хвилину; перезапис — лише для ТТН з вашої гілки).' : ' Режим перевірки — в НП нічого не пишу.') + tail);
+}
+
 function bot_cmdSetDesc(chatId, arg) {
   var firstTok = String(arg || '').trim().split(/\s+/)[0];
   var r = bot_findTtnRow_(firstTok);

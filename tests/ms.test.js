@@ -928,3 +928,26 @@ test('Редагування повідомлення, ТТН якого вже 
   assert.equal(env.sentTo(OWNER).length, n0);
   assert.equal(JSON.stringify(ttnRows(env).find(r => r.ttn === T1)), before);
 });
+
+test('/redesc: показує зміни без запису; now — оновлює описи ТТН не з реєстру, не чіпає реєстр/свій текст/⛔; повтор нічого не міняє', () => {
+  const env = liveEnv(); const c = env.ctx;
+  env.docs[T2] = npDoc(T2);
+  env.update(groupMsg(CAPN(15101, T1))); env.update(groupMsg(CAPN(15102, T2))); env.update(groupMsg(CAPN(15103, '20451556067720'))); env.poll();
+  const rows = () => ttnRows(env);
+  const byT = (t) => rows().find(r => r.ttn === t);
+  const good = byT(T1).desc;
+  c.bot_ttnPatch([{ row: byT(T1)._row, fields: { desc: 'СТАРИЙ ОПИС', len: 11 } }]);                                    // старий формат
+  c.bot_ttnPatch([{ row: byT(T2)._row, fields: { desc: 'СТАРИЙ', len: 6, registry: '105-1' } }]);                        // у реєстрі
+  c.bot_ttnPatch([{ row: byT('20451556067720')._row, fields: { desc: 'СВІЙ', len: 4, note: '✏️ свій текст' } }]);        // свій текст
+  const n0 = env.sentTo(OWNER).length;
+  env.update(privMsg('/redesc')); env.poll();
+  assert.equal(byT(T1).desc, 'СТАРИЙ ОПИС');                                                                             // лише перегляд
+  assert.ok(env.sentTo(OWNER).slice(n0).some(s => /Оновлю опис у <b>1<\/b>|Оновлю опис у 1/.test(s.text) && /redesc now/.test(s.text)));
+  env.update(privMsg('/redesc now')); env.poll();
+  assert.equal(byT(T1).desc, good);
+  assert.equal(byT(T2).desc, 'СТАРИЙ'); assert.equal(byT('20451556067720').desc, 'СВІЙ');
+  const snap = JSON.stringify(rows());
+  env.update(privMsg('/redesc now')); env.poll();                                                                         // повтор
+  assert.equal(JSON.stringify(rows()), snap);
+  assert.equal(env.docs[T1].AdditionalInformation.toLowerCase().indexOf('старий'), -1);                                   // в НП пішов новий опис
+});

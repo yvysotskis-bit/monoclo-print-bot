@@ -344,6 +344,7 @@ function bot_helpText() {
     '• /month — місячний звіт (/month 2026-08 — за вказаний місяць)\n' +
     '• /desc &lt;ТТН&gt; — опис ТТН і його статус\n' +
     '• /setdesc &lt;ТТН&gt; &lt;текст&gt; — свій текст опису (до 100 символів; «-» — повернути автоматичний)\n' +
+    '• /redesc — оновити автоматичні описи ТТН (не в реєстрі) за поточним форматом: <code>/redesc</code> — показати, <code>/redesc now</code> — застосувати, <code>/redesc ТТН</code> — одну\n' +
     '• /backfill — створити описи для замовлень із таблиці (імпорт), яких ще немає в «ТТН»\n' +
     '• /allocate — які ТТН покривають внесені оплати (позначу «Оплачено» після вашої кнопки); /undoalloc &lt;ID&gt; — скасувати\n' +
     '• /addpay &lt;сума&gt; [дата] — додати оплату вручну (напр. <code>/addpay 21401 12.09.2026</code>)\n' +
@@ -374,6 +375,7 @@ function bot_onCommand(msg, c) {
     case 'allocate': return bot_cmdAllocate(chatId);
     case 'undoalloc': return bot_cmdUndoAlloc(chatId, c.arg);
     case 'setdesc': return bot_cmdSetDesc(chatId, c.arg);
+    case 'redesc': return bot_cmdRedesc(chatId, c.arg);
     case 'registry': return bot_cmdRegistry(chatId, c.arg);
     case 'live': return bot_cmdLive(chatId);
     case 'retry': return bot_cmdRetry(chatId, c.arg);

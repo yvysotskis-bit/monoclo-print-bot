@@ -16,6 +16,7 @@ var BOT_COMMANDS_ = [
   { command: 'month', description: 'Місячний звіт' },
   { command: 'desc', description: 'Опис ТТН: /desc ТТН' },
   { command: 'setdesc', description: 'Свій опис: /setdesc ТТН текст' },
+  { command: 'redesc', description: 'Оновити описи за новим форматом' },
   { command: 'registry', description: 'Реєстр зараз / preview' },
   { command: 'backfill', description: 'Описи для замовлень з таблиці' },
   { command: 'addpay', description: 'Додати оплату: /addpay сума дата' },
