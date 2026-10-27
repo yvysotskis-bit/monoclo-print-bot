@@ -951,3 +951,32 @@ test('/redesc: показує зміни без запису; now — оновл
   assert.equal(JSON.stringify(rows()), snap);
   assert.equal(env.docs[T1].AdditionalInformation.toLowerCase().indexOf('старий'), -1);                                   // в НП пішов новий опис
 });
+
+test('Склад реєстру: після PDF у гілку «Реєстри» йде зрозумілий перелік (речі → кольори → розміри); без скасованих; повторний запуск не дублює', () => {
+  const env = liveEnv(); const c = env.ctx;
+  const m = (no, t, sz, ttn, pl) => `${no}. Принт A\n${t}\n${sz}\nПринт ${pl || 'позаду'}\n\n${ttn}`;
+  const A = '20451556067718', B = '20451556067719';
+  env.docs[B] = npDoc(B);
+  env.update(groupMsg([m(15201, 'Футболка чорна', 'M', A), m(15202, 'Футболка чорна', 'L', A), m(15203, 'Футболка біла', 'M', A), m(15204, 'Худі x3 БЕЗ ФЛІСУ', 'XL', A)].join('\n\n'))); env.poll();
+  env.update(groupMsg([m(15205, 'Худі x1', 'S', B), m(15206, 'Худі x1', 'M', B), m(15207, 'Футболка виварена', 'L', B)].join('\n\n'))); env.poll();
+  env.setNow('2026-10-07T07:00:00Z'); env.poll();
+  const msgs = env.sentTo(GROUP).filter(s => /Що в реєстрі/.test(s.text));
+  assert.equal(msgs.length, 1);
+  const t = msgs[0].text;
+  assert.ok(/7 виробів/.test(t) && /2 ТТН/.test(t), t);
+  assert.ok(/Футболка — 3 шт/.test(t) && /чорна — <b>2<\/b>: M×1, L×1/.test(t) && /біла — <b>1<\/b>: M×1/.test(t), t);
+  assert.ok(/Худі БЕЗ ФЛІСУ — 1 шт/.test(t) && /графітове \(х3\) — <b>1<\/b>: XL×1/.test(t), t);
+  assert.ok(/Худі \(фліс чи без — не вказано\) — 2 шт/.test(t) && /чорне \(х1\) — <b>2<\/b>: S×1, M×1/.test(t), t);
+  assert.ok(/Футболка виварена — 1 шт/.test(t), t);
+  env.setNow('2026-10-07T08:00:00Z'); env.poll();                                                       // той самий день — реєстру більше нема
+  assert.equal(env.sentTo(GROUP).filter(s => /Що в реєстрі/.test(s.text)).length, 1);
+});
+
+test('Склад реєстру: чиста логіка — порядок розмірів, ТТН без даних, скасовані не рахуються', () => {
+  const env = fresh(); const c = env.ctx;
+  const o = (no, ttn, type, color, size, status) => ({ no, ttn, type, color, size, status: status || 'В роботі' });
+  const sum = c.bot_regSummary([o(1, 'A', 'Футболка', 'Чорний', 'XL'), o(2, 'A', 'Футболка', 'Чорний', 'S'), o(3, 'A', 'Футболка', 'Чорний', 'XXL'), o(4, 'A', 'Футболка', 'Чорний', 'M', 'Скасовано'), o(5, 'A', 'Стікерпак', '', '')], ['A', 'B']);
+  assert.equal(sum.total, 4); assert.equal(sum.withoutData, 1);
+  assert.deepEqual([...sum.groups[0].colors[0].sizes.map(z => z.size)], ['S', 'XL', 'XXL']);
+  assert.ok(/Стікерпаки — 1 шт/.test(c.bot_regSummaryText(sum, '105-1', '27.10', 2)));
+});

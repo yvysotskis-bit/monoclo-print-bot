@@ -145,6 +145,89 @@ function bot_regThread_() {
  * Надсилає PDF реєстру (одна ТТН-порція = один файл; зазвичай файл один). Прогрес зберігається в колонці «file_id PDF»
  * (через кому): збій на 2-й порції не повторить надсилання 1-ї. Статус «Надіслано» — лише коли надіслано все.
  */
+
+// ---------- склад реєстру: що саме лежить у посилках (повідомлення в гілку «Реєстри» після PDF) ----------
+
+var BOT_SIZE_ORDER_ = ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', '2XL', '3XL', 'XXXL', '4XL'];
+var BOT_COLOR_TEE_ = { 'Чорний': 'чорна', 'Білий': 'біла', 'Сірий': 'сіра', 'Графітовий': 'графітова' };
+var BOT_COLOR_HOODIE_ = { 'Чорний': 'чорне', 'Білий': 'біле', 'Сірий': 'сіре', 'Графітовий': 'графітове' };
+
+/** Група виробів для складу: заголовок, емодзі, рід для кольору. */
+function bot_regGroupOf_(type, o) {
+  var t = String(type || '');
+  if (!t && o && Number(o.colorCode) > 0) return { key: 'hoodie?', title: 'Худі (фліс чи без — не вказано)', icon: '🧥', order: 2.7, hoodie: true };      // «Худі x1» без слів про фліс
+  if (/стікер/i.test(t)) return { key: 'sticker', title: 'Стікерпаки', icon: '🎁', order: 5 };
+  if (/кепк/i.test(t)) return { key: t, title: t.replace(/^./, function (c) { return c.toUpperCase(); }), icon: '🧢', order: 4, fem: true };
+  if (/футболк/i.test(t)) return { key: t, title: t, icon: '👕', order: /виварен/i.test(t) ? 1 : 0, tee: true };
+  if (/худі/i.test(t)) return { key: t, title: t === 'Худі не утеплене' ? 'Худі БЕЗ ФЛІСУ' : t, icon: '🧥', order: /виварен/i.test(t) ? 3 : (t === 'Худі не утеплене' ? 2.5 : 2), hoodie: true };
+  return { key: t || 'інше', title: t || 'Інше', icon: '📦', order: 9 };
+}
+
+/**
+ * Чиста логіка: що в реєстрі. orders — з bot_readOrders; ttns — ТТН реєстру.
+ * @return {total, withoutData (ТТН без замовлень у таблиці), groups:[{title, icon, count, colors:[{label, count, sizes:[{size,count}]}]}]}
+ */
+function bot_regSummary(orders, ttns) {
+  var set = {}; ttns.forEach(function (t) { set[t] = true; });
+  var groups = {}, have = {}, total = 0;
+  orders.forEach(function (o) {
+    if (!set[o.ttn] || o.status === 'Скасовано' || !(Number(o.no) > 0)) return;
+    have[o.ttn] = true; total++;
+    var g = bot_regGroupOf_(o.type, o), G = groups[g.key] = groups[g.key] || { meta: g, count: 0, colors: {} };
+    G.count++;
+    var col = o.color || (o.colorCode ? BOT_COLOR_CODES[o.colorCode] : '') || '';
+    var label = !col ? '' : ((g.hoodie ? BOT_COLOR_HOODIE_[col] : (g.tee || g.fem ? BOT_COLOR_TEE_[col] : '')) || String(col).toLowerCase());
+    if (g.hoodie && o.colorCode && !o.color) label = (BOT_COLOR_HOODIE_[BOT_COLOR_CODES[o.colorCode]] || label);
+    if (g.hoodie && o.colorCode) label = (label ? label + ' ' : '') + '(х' + o.colorCode + ')';
+    if (!label && (g.tee || g.hoodie)) label = 'колір не вказано';
+    var C = G.colors[label] = G.colors[label] || { label: label, count: 0, sizes: {} };
+    C.count++;
+    var sz = String(o.size || '').trim().toUpperCase() || '—';
+    C.sizes[sz] = (C.sizes[sz] || 0) + 1;
+  });
+  var out = Object.keys(groups).map(function (k) { return groups[k]; }).sort(function (a, b) { return a.meta.order - b.meta.order; }).map(function (G) {
+    return {
+      title: G.meta.title, icon: G.meta.icon, count: G.count,
+      colors: Object.keys(G.colors).map(function (k) { return G.colors[k]; }).sort(function (a, b) { return b.count - a.count || (a.label < b.label ? -1 : 1); }).map(function (C) {
+        return {
+          label: C.label, count: C.count,
+          sizes: Object.keys(C.sizes).sort(function (a, b) {
+            var ia = BOT_SIZE_ORDER_.indexOf(a), ib = BOT_SIZE_ORDER_.indexOf(b);
+            return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || (a < b ? -1 : 1);
+          }).map(function (z) { return { size: z, count: C.sizes[z] }; })
+        };
+      })
+    };
+  });
+  var without = ttns.filter(function (t) { return !have[t]; }).length;
+  return { total: total, withoutData: without, groups: out };
+}
+
+/** Текст для групи «Реєстри» (HTML Telegram). */
+function bot_regSummaryText(sum, regNo, dateTxt, ttnCount) {
+  var L = ['📦 <b>Що в реєстрі №' + bot_esc(regNo) + '</b> · ' + bot_esc(dateTxt) + ' · ' + ttnCount + ' ТТН · ' + sum.total + ' виробів'];
+  sum.groups.forEach(function (G) {
+    L.push('');
+    L.push(G.icon + ' <b>' + bot_esc(G.title) + ' — ' + G.count + ' шт</b>');
+    G.colors.forEach(function (C) {
+      if (!C.label && G.colors.length === 1 && C.sizes.every(function (z) { return z.size === '—'; })) return;       // стікерпак: достатньо загальної кількості
+      var sizes = C.sizes.filter(function (z) { return z.size !== '—'; }).map(function (z) { return z.size + '×' + z.count; }).join(', ');
+      L.push('   • ' + (C.label ? bot_esc(C.label) + ' — ' : '') + '<b>' + C.count + '</b>' + (sizes ? ': ' + sizes : ''));
+    });
+  });
+  if (sum.withoutData) L.push('\n⚠️ ' + sum.withoutData + ' ТТН без даних про склад у таблиці — дивіться наклейки.');
+  return L.join('\n');
+}
+
+/** Після PDF: склад реєстру в ту ж гілку. Збій не ламає реєстр (він уже надіслано). */
+function bot_regSendSummary_(reg, ttns, now, dest) {
+  try {
+    var sum = bot_regSummary(bot_readOrders(), ttns);
+    if (!sum.total && !sum.withoutData) return;
+    bot_send(dest.chat, bot_regSummaryText(sum, reg.no, bot_fmtDM(reg.date || now), reg.count || ttns.length), dest.thread !== '0' ? { thread: dest.thread } : {});
+  } catch (e) { bot_log('ПОМИЛКА', 'склад реєстру', String(e && e.message || e)); }
+}
+
 function bot_regSend_(reg, ttns, nos, now) {
   var dest = bot_regThread_();
   if (!dest.chat || dest.thread === '') throw new Error('не задано гілку «Реєстри» (/bind registry)');
@@ -165,6 +248,7 @@ function bot_regSend_(reg, ttns, nos, now) {
     }
   }
   if (!resend) bot_regWrite_(reg._row, { status: 'Надіслано', fileId: fids.join(',') });
+  bot_regSendSummary_(reg, ttns, now, dest);
   return fids.join(',');
 }
 
