@@ -83,8 +83,8 @@ function bot_tickScheduled(startedMs) {
 // ---------- ранковий звіт ----------
 
 function bot_morningParts_() {
-  var warn = Number(bot_setting('REPORT_WARN_DAYS', '3'));
-  return bot_buildMorningReport(bot_readOrders(), new Date(), { warnDays: isNaN(warn) ? 3 : warn });
+  var warn = Number(bot_setting('REPORT_WARN_DAYS', '4'));
+  return bot_buildMorningReport(bot_readOrders(), new Date(), { warnDays: isNaN(warn) ? 4 : warn });
 }
 
 /**

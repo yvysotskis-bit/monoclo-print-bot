@@ -130,7 +130,7 @@ var BOT_DEFAULT_SETTINGS = [
   ['REPORT_THREAD_ID', '', 'ID гілки «Реєстри» (/bind report)'],
   ['REPORT_TIME', '09:00', 'Час ранкового звіту (за Києвом)'],
   ['REPORT_DAYS', 'Пн,Вт,Ср,Чт,Пт,Сб', 'Дні тижня ранкового звіту'],
-  ['REPORT_WARN_DAYS', '3', 'У ранковий звіт потрапляють лише ТТН, не передані ця кількість днів і більше'],
+  ['REPORT_WARN_DAYS', '4', 'У ранковий звіт потрапляють лише ТТН, не передані ця кількість днів і більше'],
   ['STORAGE_WARN_DAYS', '4', 'Скільки днів посилка чекає на відділенні, щоб потрапити у звіт власнику'],
   ['NP_SENDER_PHONE', '', 'Телефон відправника (необов\'язково): тоді НП повертає ім\'я і телефон отримувача'],
   ['MONTHLY_REPORT', 'так', 'Місячний звіт 1-го числа: так / ні'],
@@ -3057,7 +3057,7 @@ function bot_unsentSortKey_(g) {
 /** @return масив повідомлень (кожне ≤ 4000 символів). */
 function bot_buildMorningReport(orders, now, opts) {
   opts = opts || {};
-  var warn = opts.warnDays === undefined ? 3 : opts.warnDays;
+  var warn = opts.warnDays === undefined ? 4 : opts.warnDays;
   var groups = bot_groupByTtn_(orders.filter(function (o) {
     return o.ttn && o.stage === 'Не передана' && o.status === 'В роботі';
   }));
@@ -3359,8 +3359,8 @@ function bot_tickScheduled(startedMs) {
 // ---------- ранковий звіт ----------
 
 function bot_morningParts_() {
-  var warn = Number(bot_setting('REPORT_WARN_DAYS', '3'));
-  return bot_buildMorningReport(bot_readOrders(), new Date(), { warnDays: isNaN(warn) ? 3 : warn });
+  var warn = Number(bot_setting('REPORT_WARN_DAYS', '4'));
+  return bot_buildMorningReport(bot_readOrders(), new Date(), { warnDays: isNaN(warn) ? 4 : warn });
 }
 
 /**

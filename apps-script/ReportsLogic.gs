@@ -53,7 +53,7 @@ function bot_unsentSortKey_(g) {
 /** @return масив повідомлень (кожне ≤ 4000 символів). */
 function bot_buildMorningReport(orders, now, opts) {
   opts = opts || {};
-  var warn = opts.warnDays === undefined ? 3 : opts.warnDays;
+  var warn = opts.warnDays === undefined ? 4 : opts.warnDays;
   var groups = bot_groupByTtn_(orders.filter(function (o) {
     return o.ttn && o.stage === 'Не передана' && o.status === 'В роботі';
   }));

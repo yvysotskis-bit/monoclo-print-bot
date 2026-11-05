@@ -362,6 +362,7 @@ const mkOrder = (env, over) => {
 
 test('Ранковий звіт: пн 09:01 — одне повідомлення в гілку «Реєстри»; повторно ні; неділя — ні; /report лише власнику', () => {
   const env = fresh();
+  env.ctx.bot_setSetting('REPORT_WARN_DAYS', '3');          // за замовчуванням 4; тут перевіряємо й зміну порогу з налаштувань
   mkOrder(env, { no: 1462, ttn: '20451548987230', ttnDate: env.ctx.bot_makeDate(2026, 10, 1) });
   mkOrder(env, { no: 1465, ttn: '20451549653731', ttnDate: env.ctx.bot_makeDate(2026, 10, 2) });
   mkOrder(env, { no: 1466, ttn: '20451549653731', ttnDate: env.ctx.bot_makeDate(2026, 10, 2), color: 'Білий' });
@@ -407,7 +408,7 @@ test('Ранковий звіт: «thread not found» → не в загальн
 test('Звіт: «Усі ТТН передані», коли нічого немає', () => {
   const env = fresh();
   env.setNow('2026-10-06T06:01:00Z'); env.poll();
-  assert.match(env.sentTo(GROUP)[0].text, /Немає ТТН, не переданих 3\+ дні/);
+  assert.match(env.sentTo(GROUP)[0].text, /Немає ТТН, не переданих 4\+ дні/);
 });
 
 const npItem = (ttn, code, status, extra) => Object.assign({ Number: ttn, StatusCode: String(code), Status: status, DateCreated: '2026-10-06 12:00:00' }, extra);

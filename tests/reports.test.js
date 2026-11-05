@@ -29,8 +29,8 @@ test('Ранковий звіт: приклад з ТЗ — порядок, ❗�
   assert.ok(t.indexOf('№1465') < t.indexOf('№1466'));
 });
 
-test('Ранковий звіт: порожньо → «Немає ТТН, не переданих 3+ дні», довгий — кілька повідомлень без розриву пункту', () => {
-  assert.deepEqual(Array.from(B.bot_buildMorningReport([], NOW)), ['✅ Немає ТТН, не переданих 3+ дні']);
+test('Ранковий звіт: порожньо → «Немає ТТН, не переданих 4+ дні», довгий — кілька повідомлень без розриву пункту', () => {
+  assert.deepEqual(Array.from(B.bot_buildMorningReport([], NOW)), ['✅ Немає ТТН, не переданих 4+ дні']);
   const many = Array.from({ length: 120 }, (_, i) => mk({ no: i + 1, ttn: String(20451500000000 + i), ttnDate: D(2026, 10, 1) }));
   const msgs = B.bot_buildMorningReport(many, NOW);
   assert.ok(msgs.length > 1);

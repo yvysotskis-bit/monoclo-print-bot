@@ -866,3 +866,14 @@ test('A46. Нульові рядки (стікерпак, 0 грн) не ств�
   // звичайна неоплачена ТТН, як і раніше, рахується
   assert.equal(plain(B.bot_computeDebt([row({ _row: 5, ttn: '20451550000003' })], [])).unpaidDelivered.count, 1);
 });
+
+test('A47. Ранковий звіт за замовчуванням: лише ТТН, не передані 4+ дні (3 дні — ще не потрапляють)', () => {
+  const D = (y, m, d) => B.bot_makeDate(y, m, d);
+  const now = new Date('2026-11-05T07:00:00Z');
+  const mkO = (no, ttn, d) => ({ no, print: 'P', type: 'Футболка', color: 'Чорний', size: 'M', ttn, ttnDate: d, stage: 'Не передана', status: 'В роботі', cost: 420, _row: no });
+  const orders = [mkO(1, '20451575720101', D(2026, 11, 1)), mkO(2, '20451576030329', D(2026, 11, 2)), mkO(3, '20451576030330', D(2026, 10, 30))];
+  const t = B.bot_buildMorningReport(orders, now, {})[0];
+  assert.ok(t.includes('20451575720101') && t.includes('20451576030330'), '4 дні і 6 днів — входять');
+  assert.ok(!t.includes('20451576030329'), '3 дні — не входить');
+  assert.match(t, /4\+ дні — 2 ТТН/);
+});
