@@ -98,7 +98,7 @@ test('Тип/колір: худі з/без флісу, утеплене', () =>
   assert.equal(t('Худі сіре не утеплене').type, 'Худі не утеплене');
   assert.equal(t('Худі сіре утеплене').type, 'Худі фліс');
   assert.equal(t('Худі графіт').ambiguous, true);
-  assert.equal(t('Худі графіт').color, 'Сірий');
+  assert.equal(t('Худі графіт').color, 'Графітовий');
   assert.equal(t('Футболка біла').color, 'Білий');
 });
 

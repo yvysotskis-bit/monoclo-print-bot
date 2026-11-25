@@ -181,10 +181,15 @@ function bot_deLatin_(s) {
 }
 
 function bot_normColor(text) {
-  var t = bot_deLatin_(bot_trim(text).toLowerCase());
+  var raw = bot_trim(text).toLowerCase();
+  var t = bot_deLatin_(raw);
   if (/чорн/.test(t)) return 'Чорний';
   if (/біл/.test(t)) return 'Білий';
-  if (/сір|графіт/.test(t)) return 'Сірий';
+  if (/хак[іиi]|khaki/.test(raw)) return 'Хакі';
+  if (/помаранч|оранж/.test(t)) return 'Помаранчевий';
+  if (/м['’ʼ`]?ят/.test(t)) return 'М\'ятний';
+  if (/графіт/.test(t)) return 'Графітовий';
+  if (/сір/.test(t)) return 'Сірий';
   return '';
 }
 
@@ -195,14 +200,26 @@ function bot_normColor(text) {
 function bot_parseTypeColor(text) {
   var t = bot_trim(text).toLowerCase();
   if (/[а-яіїєґ]/.test(t)) t = bot_deLatin_(t);            // змішані латиниця + кирилиця → кирилиця
-  var res = { type: '', color: bot_normColor(t), ambiguous: false, found: false };
+  var raw = bot_trim(text).toLowerCase();
+  var res = { type: '', color: bot_normColor(t), ambiguous: false, found: false, hint: '' };
   if (/стік[еи]р\s*-?\s*пак/.test(t)) { res.type = 'Стікерпак'; res.found = true; res.color = ''; return res; }
-  if (/футболк/.test(t)) { res.type = 'Футболка'; res.found = true; return res; }
+  if (/бананк/.test(t)) { res.type = 'Бананка'; res.found = true; res.color = ''; return res; }
+  if (/сумк|месенджер|мессенджер/.test(t)) { res.type = 'Сумка-месенджер'; res.found = true; res.color = ''; return res; }
+  if (/шкарпет/.test(t)) {
+    res.found = true;
+    if (/новорічн|новорічні/.test(t)) { res.type = 'Шкарпетки новорічні'; res.color = ''; }
+    else if (/коротк/.test(t)) res.type = 'Шкарпетки короткі';
+    else if (/високі|високи/.test(t)) res.type = 'Шкарпетки високі';
+    else { res.ambiguous = true; res.hint = 'Шкарпетки: не вказано «короткі», «високі» чи «новорічні»'; }
+    return res;
+  }
+  if (/(зіп|zip)[\s\-]*(худ|hood)/.test(t) || /(зіп|zip)[\s\-]*(худ|hood)/.test(raw)) { res.type = 'Зіп-худі'; res.found = true; return res; }
+  if (/футболк/.test(t)) { res.type = /blank|бланк/.test(raw) ? 'Футболка Blank' : 'Футболка'; res.found = true; return res; }
   if (/худі|худи/.test(t)) {
     res.found = true;
     if (/без\s+фліс|не\s*утепл|без\s+утепл/.test(t)) res.type = 'Худі не утеплене';
     else if (/фліс|утепл/.test(t)) res.type = 'Худі фліс';
-    else res.ambiguous = true;
+    else { res.ambiguous = true; res.hint = 'Худі: не вказано «з флісом» чи «без флісу»'; }
   }
   return res;
 }
@@ -267,7 +284,7 @@ function bot_parseOrderSegment_(lines) {
 
     var tc = bot_parseTypeColor(line);
     if (tc.found && !res.type && !res.typeAmbiguous) {
-      if (tc.ambiguous) res.typeAmbiguous = true; else res.type = tc.type;
+      if (tc.ambiguous) { res.typeAmbiguous = true; res.typeHint = tc.hint; } else res.type = tc.type;
       if (tc.color) res.color = tc.color;
       continue;
     }
@@ -277,15 +294,22 @@ function bot_parseOrderSegment_(lines) {
     if (!res.color) { var c = bot_normColor(line); if (c && line.length <= 20) { res.color = c; continue; } }
     extras.push(line);                                  // напр. «FC BARCA (PERED) W - ПЕРЕД» — опис принта
   }
-  if (!res.type && /стік[еи]р\s*-?\s*пак/i.test(bot_deLatin_(res.print.toLowerCase()))) res.type = 'Стікерпак';   // «1500. Стікерпак Ландо Норріс»
+  if (!res.type && !res.typeAmbiguous) {                    // «1500. Стікерпак Ландо Норріс», «1707. Бананка базова»: вид речі в назві позиції
+    var inName = bot_parseTypeColor(res.print);
+    if (inName.found && !inName.ambiguous && (BOT_NO_SIZE_COLOR_TYPES.indexOf(inName.type) >= 0 || BOT_NO_SIZE_TYPES.indexOf(inName.type) >= 0 || inName.type === 'Зіп-худі')) {
+      res.type = inName.type; if (!res.color && inName.color) res.color = inName.color;
+    }
+    else if (inName.found && inName.ambiguous && /Шкарпетки/.test(inName.hint)) { res.typeAmbiguous = true; res.typeHint = inName.hint; }
+  }
   if (/^принти?\s*$/i.test(res.print) && extras.length) res.print = res.print + ' ' + extras.join(' / ');
 
   if (!res.type) {
-    res.issues.push({ field: 'type', text: res.typeAmbiguous ? 'Худі: не вказано «з флісом» чи «без флісу»' : 'не вказано вид речі (футболка / худі)' });
+    res.issues.push({ field: 'type', text: res.typeAmbiguous ? (res.typeHint || 'Худі: не вказано «з флісом» чи «без флісу»') : 'не вказано вид речі (футболка / худі)' });
   }
   var noSz = BOT_NO_SIZE_COLOR_TYPES.indexOf(res.type) >= 0;
+  var noSize = noSz || BOT_NO_SIZE_TYPES.indexOf(res.type) >= 0;
   if (!res.color && !noSz) res.issues.push({ field: 'color', text: 'не вказано колір' });
-  if (!res.size && !noSz) res.issues.push({ field: 'size', text: 'не вказано розмір' });
+  if (!res.size && !noSize) res.issues.push({ field: 'size', text: 'не вказано розмір' });
   if (!res.ttn) {
     res.issues.push({ field: 'ttn', text: badTtn ? 'ТТН «' + badTtn + '» — не 14 цифр' : 'немає ТТН' });
   }

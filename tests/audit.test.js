@@ -877,3 +877,38 @@ test('A47. Ранковий звіт за замовчуванням: лише �
   assert.ok(!t.includes('20451576030329'), '3 дні — не входить');
   assert.match(t, /4\+ дні — 2 ТТН/);
 });
+
+test('A48. Нові товари (листопад 2026): зіп-худі, Blank, шкарпетки, бананка, сумка; нові кольори; розмір/колір де потрібно', () => {
+  const one = (t) => plain(B.bot_parseOrderMessage(t))[0];
+  const fields = o => o.issues.map(i => i.field).sort();
+  const z = one('1700. Принт Audi\nЗіп-худі чорне\nL\n20451590000001');
+  assert.equal(z.type, 'Зіп-худі'); assert.equal(z.color, 'Чорний'); assert.deepEqual(fields(z), []);
+  assert.equal(one('1701. X\nzip hoodie black\nM\n20451590000002').type, 'Зіп-худі');
+  const b = one('1702. Blank\nФутболка Blank хакі\nL\n20451590000003');
+  assert.equal(b.type, 'Футболка Blank'); assert.equal(b.color, 'Хакі');
+  assert.equal(one('1703. X\nфутболка blank\nпомаранчева\nM\n20451590000004').color, 'Помаранчевий');
+  assert.equal(one("1704. X\nФутболка м'ятна\nS\n20451590000005").color, "М'ятний");
+  assert.equal(one('1705. X\nФутболка графітова\nS\n20451590000006').color, 'Графітовий');
+  assert.equal(one('1706. X\nФутболка\nчорна\nM\n20451590000007').type, 'Футболка', 'звичайна футболка не стає Blank');
+  const ban = one('1707. Бананка базова чорна\n20451590000008');
+  assert.equal(ban.type, 'Бананка'); assert.deepEqual(fields(ban), []);
+  assert.equal(one('1708. Сумка-месенджер\n20451590000009').type, 'Сумка-месенджер');
+  const sk = one('1709. Шкарпетки високі\nчорні\n20451590000010');
+  assert.equal(sk.type, 'Шкарпетки високі'); assert.deepEqual(fields(sk), [], 'розмір шкарпеткам не потрібен');
+  assert.equal(one('1710. Шкарпетки короткі\nбілі\n20451590000011').type, 'Шкарпетки короткі');
+  assert.deepEqual(fields(one('1711. Шкарпетки новорічні\n20451590000012')), []);
+  const amb = one('1712. Шкарпетки\nчорні\n20451590000013');
+  assert.equal(amb.type, ''); assert.ok(amb.issues.some(i => i.field === 'type' && /Шкарпетки/.test(i.text)));
+  // зіп-худі не плутається зі звичайним худі
+  assert.equal(one('1713. X\nХуді чорне з флісом\nL\n20451590000014').type, 'Худі фліс');
+  // тип без ціни в прайсі не отримує тихий 0: ціни немає → null
+  assert.equal(B.bot_priceFor([{ type: 'Футболка', price: 420, from: B.bot_makeDate(2026, 1, 1) }], 'Зіп-худі', B.bot_makeDate(2026, 11, 26)), null);
+});
+
+test('A49. Замовлення з типом без ціни в прайсі: рядок створюється, собівартість порожня, жовта позначка й повідомлення; після /price — ціна підхоплюється при правці', () => {
+  const env = fresh();
+  env.update(gmsg('1800. Принт Audi\nЗіп-худі чорне\nL\n20451590000101')); env.poll();
+  const o = O(env).find(x => x.no === 1800);
+  assert.ok(o); assert.equal(o.type, 'Зіп-худі'); assert.ok(!(o.cost > 0), 'собівартість не вигадується');
+  assert.ok(env.tg.sent.some(s => /немає в прайсі/.test(s.text || '')), 'власник бачить, що ціни немає');
+});
