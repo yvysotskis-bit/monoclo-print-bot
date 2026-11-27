@@ -188,6 +188,7 @@ function bot_normColor(text) {
   if (/хак[іиi]|khaki/.test(raw)) return 'Хакі';
   if (/помаранч|оранж/.test(t)) return 'Помаранчевий';
   if (/м['’ʼ`]?ят/.test(t)) return 'М\'ятний';
+  if (/мульти|різнокольор/.test(t)) return 'Мультиколір';
   if (/графіт/.test(t)) return 'Графітовий';
   if (/сір/.test(t)) return 'Сірий';
   return '';
@@ -203,6 +204,7 @@ function bot_parseTypeColor(text) {
   var raw = bot_trim(text).toLowerCase();
   var res = { type: '', color: bot_normColor(t), ambiguous: false, found: false, hint: '' };
   if (/стік[еи]р\s*-?\s*пак/.test(t)) { res.type = 'Стікерпак'; res.found = true; res.color = ''; return res; }
+  if (/листівк|открытк|листівок/.test(t)) { res.type = 'Листівка'; res.found = true; res.color = 'Мультиколір'; return res; }
   if (/бананк/.test(t)) { res.type = 'Бананка'; res.found = true; res.color = ''; return res; }
   if (/сумк|месенджер|мессенджер/.test(t)) { res.type = 'Сумка-месенджер'; res.found = true; res.color = ''; return res; }
   if (/шкарпет/.test(t)) {

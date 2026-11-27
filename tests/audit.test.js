@@ -923,3 +923,13 @@ test('A50. «Шкарпетки сині / бордові» = новорічні
   assert.equal(one('2619. X\nШкарпетки високі чорні\n20451590000203').type, 'Шкарпетки високі');
   assert.equal(one('2620. Шкарпетки сині\n20451590000204').type, 'Шкарпетки новорічні', 'назва в першому рядку');
 });
+
+test('A51. Листівка (наша, 0 грн): тип «Листівка», колір «Мультиколір» автоматично, розмір не потрібен', () => {
+  const one = (t) => plain(B.bot_parseOrderMessage(t))[0];
+  const a = one('2700. Листівка PIT PASS 2027\n20451590000301');
+  assert.equal(a.type, 'Листівка'); assert.equal(a.color, 'Мультиколір'); assert.deepEqual(a.issues, []);
+  const b = one('2701. Принт PIT PASS 2027\nЛистівка\n20451590000302');
+  assert.equal(b.type, 'Листівка'); assert.equal(b.color, 'Мультиколір'); assert.deepEqual(b.issues, []);
+  assert.equal(B.bot_normColor('мультиколір'), 'Мультиколір');
+  assert.equal(B.bot_itemLabel('Листівка', 'Мультиколір'), 'Листівка Мультиколір');
+});
