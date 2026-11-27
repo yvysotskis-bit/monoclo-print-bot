@@ -381,6 +381,7 @@ function bot_parseTypeColor(text) {
     if (/новорічн|новорічні/.test(t)) { res.type = 'Шкарпетки новорічні'; res.color = ''; }
     else if (/коротк/.test(t)) res.type = 'Шкарпетки короткі';
     else if (/високі|високи/.test(t)) res.type = 'Шкарпетки високі';
+    else if (/син[іїя]|синій|синьо|бордов/.test(t)) { res.type = 'Шкарпетки новорічні'; res.color = ''; }   // базові бувають лише чорні, білі, сірі; сині й бордові — новорічні
     else { res.ambiguous = true; res.hint = 'Шкарпетки: не вказано «короткі», «високі» чи «новорічні»'; }
     return res;
   }
